@@ -49,7 +49,11 @@ class PRListView(Widget):
             with TabPane("Ambient", id="tab-ambient"):
                 yield OptionList(id="ambient-option-list", classes="pr-option-list")
 
-    def set_pull_requests(self, scored_prs: List[ScoredPullRequest]) -> None:
+    def set_pull_requests(
+        self,
+        scored_prs: List[ScoredPullRequest],
+        preserve_pr_key: Optional[str] = None,
+    ) -> None:
         self.all_scored_prs = scored_prs
         actionable_prs = [p for p in scored_prs if p.is_actionable]
         self.active_prs = [p for p in actionable_prs if p.score.total_score >= self.min_threshold]
@@ -57,6 +61,7 @@ class PRListView(Widget):
 
         queue_list = self.query_one("#queue-option-list", OptionList)
         ambient_list = self.query_one("#ambient-option-list", OptionList)
+        tabs = self.query_one("#pr-tabs", TabbedContent)
 
         queue_list.clear_options()
         ambient_list.clear_options()
@@ -64,11 +69,33 @@ class PRListView(Widget):
         self._populate_list(queue_list, self.active_prs)
         self._populate_list(ambient_list, self.ambient_prs)
 
-        # Highlight first item if available
+        # Try to restore preserved PR selection
+        if preserve_pr_key:
+            # Check queue list first
+            for idx, p in enumerate(self.active_prs):
+                key = f"{p.pr.repo_name_with_owner}#{p.pr.number}"
+                if key == preserve_pr_key:
+                    tabs.active = "tab-queue"
+                    queue_list.highlighted = idx
+                    self.post_message(self.PRSelected(p))
+                    return
+
+            # Check ambient list next
+            for idx, p in enumerate(self.ambient_prs):
+                key = f"{p.pr.repo_name_with_owner}#{p.pr.number}"
+                if key == preserve_pr_key:
+                    tabs.active = "tab-ambient"
+                    ambient_list.highlighted = idx
+                    self.post_message(self.PRSelected(p))
+                    return
+
+        # Fallback to highlighting first available item
         if self.active_prs:
+            tabs.active = "tab-queue"
             queue_list.highlighted = 0
             self.post_message(self.PRSelected(self.active_prs[0]))
         elif self.ambient_prs:
+            tabs.active = "tab-ambient"
             ambient_list.highlighted = 0
             self.post_message(self.PRSelected(self.ambient_prs[0]))
 

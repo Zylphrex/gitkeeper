@@ -53,6 +53,31 @@ class DiffViewer(Widget):
         yield Label("No file selected", id="diff-header")
         yield OptionList(id="diff-options")
 
+    def show_loading(self, pr_identifier: str = "") -> None:
+        """Display a loading state in the diff pane."""
+        header = self.query_one("#diff-header", Label)
+        options = self.query_one("#diff-options", OptionList)
+        options.clear_options()
+        self._rendered_lines = []
+        self.file_diff = None
+
+        text = f"Fetching diff for {pr_identifier}..." if pr_identifier else "Fetching diff..."
+        header.update(f"⠋ {text}")
+        loading_text = Text(f"\n  ⠋ Loading diff lines from GitHub...\n", style="dim italic")
+        options.add_option(Option(loading_text, disabled=True))
+
+    def show_error(self, message: str) -> None:
+        """Display an error state in the diff pane."""
+        header = self.query_one("#diff-header", Label)
+        options = self.query_one("#diff-options", OptionList)
+        options.clear_options()
+        self._rendered_lines = []
+        self.file_diff = None
+
+        header.update("⚠ Diff unavailable")
+        err_text = Text(f"\n  ⚠ Failed to load diff: {message}\n", style="bold red")
+        options.add_option(Option(err_text, disabled=True))
+
     def set_file_diff(self, file_diff: Optional[FileDiff], draft_comments: Optional[List[DraftReviewComment]] = None) -> None:
         self.file_diff = file_diff
         header = self.query_one("#diff-header", Label)
@@ -173,6 +198,28 @@ class PRDiffView(Widget):
                 yield OptionList(id="file-option-list")
             with Vertical(id="diff-viewer-pane"):
                 yield DiffViewer(id="diff-viewer")
+
+    def show_loading(self, pr_identifier: str = "") -> None:
+        """Set the entire diff view into a loading state."""
+        self.file_diffs = []
+        self.draft_comments = []
+        file_list = self.query_one("#file-option-list", OptionList)
+        file_list.clear_options()
+        file_list.add_option(Option("⠋ Loading files...", disabled=True))
+
+        diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+        diff_viewer.show_loading(pr_identifier)
+
+    def show_error(self, message: str) -> None:
+        """Set the diff view into an error state."""
+        self.file_diffs = []
+        self.draft_comments = []
+        file_list = self.query_one("#file-option-list", OptionList)
+        file_list.clear_options()
+        file_list.add_option(Option("⚠ Error loading files", disabled=True))
+
+        diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+        diff_viewer.show_error(message)
 
     def load_diff(self, diff_text: str, draft_comments: Optional[List[DraftReviewComment]] = None) -> None:
         self.file_diffs = UnifiedDiffParser.parse(diff_text)

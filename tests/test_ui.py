@@ -1,3 +1,4 @@
+from datetime import datetime
 import pytest
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
@@ -6,6 +7,7 @@ from gitkeeper.scoring.calculator import ScoreBreakdown
 from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
 from gitkeeper.ui.diff_view import DiffViewer, PRDiffView
+from gitkeeper.ui.header import AppHeader
 from gitkeeper.ui.list_view import PRListView
 from gitkeeper.ui.modals import InlineCommentModal, SubmitReviewModal
 from gitkeeper.ui.overview_view import PROverviewView
@@ -68,6 +70,14 @@ async def test_pr_list_view_and_selection():
         assert overview.scored_pr is not None
         assert overview.scored_pr.pr.number == 101
 
+        # Test preserving selection across updates
+        app._load_scored_prs([
+            _make_mock_scored_pr(103, 90),
+            _make_mock_scored_pr(101, 80),
+        ])
+        assert overview.scored_pr.pr.number == 101
+
+
 
 @pytest.mark.asyncio
 async def test_pr_diff_view_and_inline_comment():
@@ -88,6 +98,39 @@ async def test_pr_diff_view_and_inline_comment():
         diff_viewer = app.query_one("#diff-viewer", DiffViewer)
         assert diff_viewer.file_diff is not None
         assert diff_viewer.file_diff.display_path == "auth/jwt.py"
+
+        # Test diff loading state
+        diff_view.show_loading("#101")
+        assert len(diff_view.file_diffs) == 0
+
+        # Test diff error state
+        diff_view.show_error("Failed to fetch diff from GitHub")
+        assert len(diff_view.file_diffs) == 0
+
+
+
+@pytest.mark.asyncio
+async def test_app_header_widget():
+    header = AppHeader()
+    assert header.status_text == "Ready"
+    assert header.is_loading is False
+    assert header._render_timestamp_text() == "Last refreshed: Never"
+
+    header.set_loading("Fetching PRs...")
+    assert header.is_loading is True
+    assert header.status_text == "Fetching PRs..."
+    assert header._render_status_text() == "⠋ Fetching PRs..."
+
+    ts = datetime(2026, 8, 17, 14, 30, 0)
+    header.set_idle("Queue updated", refreshed_at=ts)
+    assert header.is_loading is False
+    assert header.status_text == "Queue updated"
+    assert header._render_timestamp_text() == "Last refreshed: 14:30:00"
+
+    header.set_error("Network timeout")
+    assert header.is_loading is False
+    assert header.status_text == "⚠ Network timeout"
+    assert header._render_status_text() == "⚠ Network timeout"
 
 
 @pytest.mark.asyncio

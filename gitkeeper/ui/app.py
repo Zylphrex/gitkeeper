@@ -1,15 +1,17 @@
+from datetime import datetime
 from typing import Dict, List, Optional
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Footer, Header, Label, TabbedContent, TabPane
+from textual.widgets import Footer, Label, TabbedContent, TabPane
 
 from gitkeeper.config import Config
 from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient, PullRequestData
 from gitkeeper.repos import RepoLocator
 from gitkeeper.scoring.pipeline import RelevancePipeline, ScoredPullRequest
 from gitkeeper.ui.diff_view import PRDiffView
+from gitkeeper.ui.header import AppHeader
 from gitkeeper.ui.list_view import PRListView
 from gitkeeper.ui.modals import InlineCommentModal, SubmitReviewModal
 from gitkeeper.ui.overview_view import PROverviewView
@@ -70,7 +72,7 @@ class GitkeeperApp(App):
         self.draft_comments: Dict[str, List[DraftReviewComment]] = {}
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield AppHeader(id="app-header")
         with Horizontal(id="main-container"):
             yield PRListView(
                 min_threshold=self.config.heuristics.min_score_threshold,
@@ -92,13 +94,16 @@ class GitkeeperApp(App):
 
     def _load_scored_prs(self, scored_prs: List[ScoredPullRequest]) -> None:
         pr_list_view = self.query_one("#pr-list-view", PRListView)
-        pr_list_view.set_pull_requests(scored_prs)
+        preserve_key = None
+        if self.current_scored_pr:
+            preserve_key = f"{self.current_scored_pr.pr.repo_name_with_owner}#{self.current_scored_pr.pr.number}"
+
+        pr_list_view.set_pull_requests(scored_prs, preserve_pr_key=preserve_key)
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update(f"Loaded {len(scored_prs)} review requests.")
-        if pr_list_view.active_prs:
-            self._select_pr(pr_list_view.active_prs[0])
-        elif pr_list_view.ambient_prs:
-            self._select_pr(pr_list_view.ambient_prs[0])
+        selected = pr_list_view.get_selected_pr()
+        if selected:
+            self._select_pr(selected)
 
     def on_pr_list_view_pr_selected(self, event: PRListView.PRSelected) -> None:
         self._select_pr(event.scored_pr)
@@ -113,13 +118,31 @@ class GitkeeperApp(App):
         if pr_key in self.cached_diffs:
             self._display_cached_diff(pr_key)
         else:
+            diff_view = self.query_one("#pr-diff-view", PRDiffView)
+            diff_view.show_loading(f"#{scored_pr.pr.number}")
             self._fetch_diff_for_pr(scored_pr.pr)
 
     def _display_cached_diff(self, pr_key: str) -> None:
+        if not self.current_scored_pr:
+            return
+        curr_key = f"{self.current_scored_pr.pr.repo_name_with_owner}#{self.current_scored_pr.pr.number}"
+        if pr_key != curr_key:
+            return
+
         diff_view = self.query_one("#pr-diff-view", PRDiffView)
         diff_text = self.cached_diffs.get(pr_key, "")
         comments = self.draft_comments.get(pr_key, [])
         diff_view.load_diff(diff_text, comments)
+
+    def _display_diff_error(self, pr_key: str, message: str) -> None:
+        if not self.current_scored_pr:
+            return
+        curr_key = f"{self.current_scored_pr.pr.repo_name_with_owner}#{self.current_scored_pr.pr.number}"
+        if pr_key != curr_key:
+            return
+
+        diff_view = self.query_one("#pr-diff-view", PRDiffView)
+        diff_view.show_error(message)
 
     @work(exclusive=True, thread=True)
     def _fetch_diff_for_pr(self, pr: PullRequestData) -> None:
@@ -132,6 +155,7 @@ class GitkeeperApp(App):
             self.cached_diffs[pr_key] = diff_text
             self.app.call_from_thread(self._display_cached_diff, pr_key)
         except Exception as exc:
+            self.app.call_from_thread(self._display_diff_error, pr_key, str(exc))
             self.app.call_from_thread(self._set_status, f"Error fetching diff: {exc}")
 
     def _set_status(self, text: str) -> None:
@@ -234,12 +258,34 @@ class GitkeeperApp(App):
         except Exception as exc:
             self.app.call_from_thread(self._set_status, f"Error submitting review: {exc}")
 
+    def _set_header_loading(self, message: str) -> None:
+        try:
+            header = self.query_one("#app-header", AppHeader)
+            header.set_loading(message)
+        except Exception:
+            pass
+
+    def _set_header_idle(self, message: str = "Ready", refreshed_at: Optional[datetime] = None) -> None:
+        try:
+            header = self.query_one("#app-header", AppHeader)
+            header.set_idle(message, refreshed_at=refreshed_at)
+        except Exception:
+            pass
+
+    def _set_header_error(self, message: str) -> None:
+        try:
+            header = self.query_one("#app-header", AppHeader)
+            header.set_error(message)
+        except Exception:
+            pass
+
     @work(exclusive=True, thread=True)
     def action_refresh_queue(self) -> None:
         if not self.client:
             return
 
         self.app.call_from_thread(self._set_status, "Fetching review requests from GitHub...")
+        self.app.call_from_thread(self._set_header_loading, "Fetching review requests from GitHub...")
         try:
             user = self.config.github.user
             if not user:
@@ -250,10 +296,17 @@ class GitkeeperApp(App):
                     pass
 
             prs = self.client.fetch_pending_review_requests(user)
+
+            self.app.call_from_thread(self._set_status, "Evaluating relevance heuristics & local repos...")
+            self.app.call_from_thread(self._set_header_loading, "Evaluating relevance heuristics...")
+
             repo_locator = RepoLocator(self.config.repositories)
             pipeline = RelevancePipeline(self.config, repo_locator)
             scored = pipeline.process(prs)
 
+            now = datetime.now()
             self.app.call_from_thread(self._load_scored_prs, scored)
+            self.app.call_from_thread(self._set_header_idle, "Ready", refreshed_at=now)
         except Exception as exc:
             self.app.call_from_thread(self._set_status, f"Error refreshing queue: {exc}")
+            self.app.call_from_thread(self._set_header_error, f"Refresh failed: {exc}")
