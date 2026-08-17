@@ -58,14 +58,20 @@ async def test_pr_list_view_and_selection():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, 85), _make_mock_scored_pr(102, 30)],
+        scored_prs=[
+            _make_mock_scored_pr(102, 30),
+            _make_mock_scored_pr(101, 85),
+            _make_mock_scored_pr(103, 50),
+        ],
     )
 
     async with app.run_test() as pilot:
         # Check initial widgets
         pr_list = app.query_one("#pr-list-view", PRListView)
-        assert len(pr_list.active_prs) == 1
-        assert len(pr_list.ambient_prs) == 1
+        # All 3 actionable PRs should be in active_prs sorted strictly descending by score
+        assert len(pr_list.active_prs) == 3
+        assert [p.pr.number for p in pr_list.active_prs] == [101, 103, 102]
+        assert [p.score.total_score for p in pr_list.active_prs] == [85, 50, 30]
 
         overview = app.query_one("#pr-overview-view", PROverviewView)
         assert overview.scored_pr is not None
@@ -73,39 +79,25 @@ async def test_pr_list_view_and_selection():
 
         # Test preserving selection across updates
         app._load_scored_prs([
-            _make_mock_scored_pr(103, 90),
+            _make_mock_scored_pr(104, 90),
             _make_mock_scored_pr(101, 80),
+            _make_mock_scored_pr(105, 20),
         ])
         assert overview.scored_pr.pr.number == 101
+        assert [p.pr.number for p in pr_list.active_prs] == [104, 101, 105]
 
-        # Test clicking / selecting an option in queue
-        queue_list = app.query_one("#queue-option-list", OptionList)
-        queue_list.action_first()
-        queue_list.action_select()
+        # Test clicking / selecting an option in list
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option_list.action_first()
+        option_list.action_select()
         await pilot.pause()
-        assert overview.scored_pr.pr.number == 103
+        assert overview.scored_pr.pr.number == 104
 
-        # Test switching to Ambient tab activates the ambient PR
-        tabs = app.query_one("#pr-tabs")
-        tabs.active = "tab-ambient"
+        # Test selecting last option in list
+        option_list.action_last()
+        option_list.action_select()
         await pilot.pause()
-        assert overview.scored_pr is not None
-        # We don't have ambient PRs in the updated list above, let's load mixed
-        app._load_scored_prs([
-            _make_mock_scored_pr(201, 95),
-            _make_mock_scored_pr(202, 20),
-        ])
-        assert overview.scored_pr.pr.number == 201
-
-        # Switch tab to ambient
-        tabs.active = "tab-ambient"
-        await pilot.pause()
-        assert overview.scored_pr.pr.number == 202
-
-        # Switch back to queue tab
-        tabs.active = "tab-queue"
-        await pilot.pause()
-        assert overview.scored_pr.pr.number == 201
+        assert overview.scored_pr.pr.number == 105
 
 
 
