@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Dict, List, Optional
-from textual import work
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
@@ -105,22 +105,29 @@ class GitkeeperApp(App):
         if selected:
             self._select_pr(selected)
 
+    @on(PRListView.PRSelected)
     def on_pr_list_view_pr_selected(self, event: PRListView.PRSelected) -> None:
         self._select_pr(event.scored_pr)
 
     def _select_pr(self, scored_pr: ScoredPullRequest) -> None:
         self.current_scored_pr = scored_pr
-        overview_view = self.query_one("#pr-overview-view", PROverviewView)
-        overview_view.update_pr(scored_pr)
+        try:
+            overview_view = self.query_one("#pr-overview-view", PROverviewView)
+            overview_view.update_pr(scored_pr)
+        except Exception:
+            pass
 
         # Clear or load diff
         pr_key = f"{scored_pr.pr.repo_name_with_owner}#{scored_pr.pr.number}"
         if pr_key in self.cached_diffs:
             self._display_cached_diff(pr_key)
         else:
-            diff_view = self.query_one("#pr-diff-view", PRDiffView)
-            diff_view.show_loading(f"#{scored_pr.pr.number}")
-            self._fetch_diff_for_pr(scored_pr.pr)
+            try:
+                diff_view = self.query_one("#pr-diff-view", PRDiffView)
+                diff_view.show_loading(f"#{scored_pr.pr.number}")
+                self._fetch_diff_for_pr(scored_pr.pr)
+            except Exception:
+                pass
 
     def _display_cached_diff(self, pr_key: str) -> None:
         if not self.current_scored_pr:

@@ -1,5 +1,6 @@
 from typing import List, Optional
 from rich.text import Text
+from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
@@ -112,13 +113,46 @@ class PRListView(Widget):
 
             option_list.add_option(Option(text, id=f"pr_{item.pr.number}_{idx}"))
 
+    def _handle_option_selection(self, list_id: Optional[str], option_index: Optional[int]) -> None:
+        if option_index is None:
+            return
+        if list_id == "queue-option-list":
+            if option_index < len(self.active_prs):
+                queue_list = self.query_one("#queue-option-list", OptionList)
+                if queue_list.highlighted != option_index:
+                    queue_list.highlighted = option_index
+                self.post_message(self.PRSelected(self.active_prs[option_index]))
+        elif list_id == "ambient-option-list":
+            if option_index < len(self.ambient_prs):
+                ambient_list = self.query_one("#ambient-option-list", OptionList)
+                if ambient_list.highlighted != option_index:
+                    ambient_list.highlighted = option_index
+                self.post_message(self.PRSelected(self.ambient_prs[option_index]))
+
+    @on(OptionList.OptionHighlighted)
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option_list.id == "queue-option-list":
-            if event.option_index is not None and event.option_index < len(self.active_prs):
-                self.post_message(self.PRSelected(self.active_prs[event.option_index]))
-        elif event.option_list.id == "ambient-option-list":
-            if event.option_index is not None and event.option_index < len(self.ambient_prs):
-                self.post_message(self.PRSelected(self.ambient_prs[event.option_index]))
+        self._handle_option_selection(event.option_list.id, event.option_index)
+
+    @on(OptionList.OptionSelected)
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._handle_option_selection(event.option_list.id, event.option_index)
+
+    @on(TabbedContent.TabActivated)
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        if event.tabbed_content.id != "pr-tabs":
+            return
+        if event.pane.id == "tab-queue":
+            queue_list = self.query_one("#queue-option-list", OptionList)
+            if queue_list.highlighted is None and self.active_prs:
+                queue_list.highlighted = 0
+            if queue_list.highlighted is not None and queue_list.highlighted < len(self.active_prs):
+                self.post_message(self.PRSelected(self.active_prs[queue_list.highlighted]))
+        elif event.pane.id == "tab-ambient":
+            ambient_list = self.query_one("#ambient-option-list", OptionList)
+            if ambient_list.highlighted is None and self.ambient_prs:
+                ambient_list.highlighted = 0
+            if ambient_list.highlighted is not None and ambient_list.highlighted < len(self.ambient_prs):
+                self.post_message(self.PRSelected(self.ambient_prs[ambient_list.highlighted]))
 
     def get_selected_pr(self) -> Optional[ScoredPullRequest]:
         tabs = self.query_one("#pr-tabs", TabbedContent)

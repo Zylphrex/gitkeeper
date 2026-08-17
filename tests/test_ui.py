@@ -1,5 +1,6 @@
 from datetime import datetime
 import pytest
+from textual.widgets import OptionList
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
 from gitkeeper.github.client import DraftReviewComment, PullRequestData
@@ -76,6 +77,35 @@ async def test_pr_list_view_and_selection():
             _make_mock_scored_pr(101, 80),
         ])
         assert overview.scored_pr.pr.number == 101
+
+        # Test clicking / selecting an option in queue
+        queue_list = app.query_one("#queue-option-list", OptionList)
+        queue_list.action_first()
+        queue_list.action_select()
+        await pilot.pause()
+        assert overview.scored_pr.pr.number == 103
+
+        # Test switching to Ambient tab activates the ambient PR
+        tabs = app.query_one("#pr-tabs")
+        tabs.active = "tab-ambient"
+        await pilot.pause()
+        assert overview.scored_pr is not None
+        # We don't have ambient PRs in the updated list above, let's load mixed
+        app._load_scored_prs([
+            _make_mock_scored_pr(201, 95),
+            _make_mock_scored_pr(202, 20),
+        ])
+        assert overview.scored_pr.pr.number == 201
+
+        # Switch tab to ambient
+        tabs.active = "tab-ambient"
+        await pilot.pause()
+        assert overview.scored_pr.pr.number == 202
+
+        # Switch back to queue tab
+        tabs.active = "tab-queue"
+        await pilot.pause()
+        assert overview.scored_pr.pr.number == 201
 
 
 
