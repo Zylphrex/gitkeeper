@@ -1,0 +1,162 @@
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+import httpx
+from gitkeeper.github.auth import AuthProvider
+from gitkeeper.github.queries import REVIEW_REQUESTS_QUERY, VIEWER_QUERY
+
+
+@dataclass
+class ReviewerRequest:
+    login_or_slug: str
+    is_team: bool
+
+
+@dataclass
+class ReviewRecord:
+    author: str
+    state: str
+    submitted_at: Optional[str] = None
+
+
+@dataclass
+class PullRequestFile:
+    path: str
+    additions: int
+    deletions: int
+    change_type: str
+
+
+@dataclass
+class PullRequestData:
+    id: str
+    number: int
+    title: str
+    url: str
+    repo_name_with_owner: str
+    author: str
+    is_draft: bool
+    state: str
+    created_at: str
+    updated_at: str
+    additions: int
+    deletions: int
+    changed_files_count: int
+    ci_status: Optional[str]  # e.g., 'SUCCESS', 'FAILURE', 'PENDING', None
+    requested_reviewers: List[ReviewerRequest] = field(default_factory=list)
+    reviews: List[ReviewRecord] = field(default_factory=list)
+    files: List[PullRequestFile] = field(default_factory=list)
+
+
+class GitHubGraphQLClient:
+    def __init__(self, auth_provider: AuthProvider, endpoint: str = "https://api.github.com/graphql"):
+        self.auth_provider = auth_provider
+        self.endpoint = endpoint
+
+    def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        headers = self.auth_provider.get_auth_headers()
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                self.endpoint,
+                headers=headers,
+                json={"query": query, "variables": variables or {}},
+            )
+            if response.status_code == 401:
+                raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
+            response.raise_for_status()
+            data = response.json()
+
+            if "errors" in data and data["errors"]:
+                messages = [err.get("message", "Unknown GraphQL error") for err in data["errors"]]
+                raise RuntimeError(f"GitHub GraphQL error: {'; '.join(messages)}")
+            return data.get("data", {})
+
+    def get_viewer_login(self) -> str:
+        """Fetch current authenticated user's GitHub username."""
+        data = self._execute_query(VIEWER_QUERY)
+        return data.get("viewer", {}).get("login", "")
+
+    def fetch_pending_review_requests(self, username: Optional[str] = None) -> List[PullRequestData]:
+        """
+        Fetch open pull requests where review is requested from the user or their teams.
+        Search query format: `is:open is:pr review-requested:@me` (or `review-requested:USERNAME`)
+        """
+        user_filter = username if username else "@me"
+        search_query = f"is:open is:pr review-requested:{user_filter} archived:false"
+        data = self._execute_query(REVIEW_REQUESTS_QUERY, {"query": search_query})
+
+        nodes = data.get("search", {}).get("nodes", [])
+        results: List[PullRequestData] = []
+
+        for node in nodes:
+            if not node or not isinstance(node, dict) or "number" not in node:
+                continue
+
+            repo_name = node.get("repository", {}).get("nameWithOwner", "")
+            author_login = node.get("author", {}).get("login", "unknown") if node.get("author") else "unknown"
+
+            # Parse requested reviewers
+            requested: List[ReviewerRequest] = []
+            for req in node.get("reviewRequests", {}).get("nodes", []):
+                rev = req.get("requestedReviewer")
+                if rev:
+                    if "slug" in rev:
+                        requested.append(ReviewerRequest(login_or_slug=rev["slug"], is_team=True))
+                    elif "login" in rev:
+                        requested.append(ReviewerRequest(login_or_slug=rev["login"], is_team=False))
+
+            # Parse reviews
+            reviews: List[ReviewRecord] = []
+            for r in node.get("reviews", {}).get("nodes", []):
+                rev_author = r.get("author", {}).get("login", "") if r.get("author") else ""
+                reviews.append(
+                    ReviewRecord(
+                        author=rev_author,
+                        state=r.get("state", ""),
+                        submitted_at=r.get("submittedAt"),
+                    )
+                )
+
+            # Parse status check rollup
+            ci_status = None
+            commits = node.get("commits", {}).get("nodes", [])
+            if commits and commits[0].get("commit"):
+                rollup = commits[0]["commit"].get("statusCheckRollup")
+                if rollup:
+                    ci_status = rollup.get("state")  # e.g., SUCCESS, FAILURE, PENDING, ERROR
+
+            # Parse touched files
+            files: List[PullRequestFile] = []
+            for f in node.get("files", {}).get("nodes", []):
+                files.append(
+                    PullRequestFile(
+                        path=f.get("path", ""),
+                        additions=f.get("additions", 0),
+                        deletions=f.get("deletions", 0),
+                        change_type=f.get("changeType", "MODIFIED"),
+                    )
+                )
+
+            results.append(
+                PullRequestData(
+                    id=node.get("id", ""),
+                    number=node.get("number", 0),
+                    title=node.get("title", ""),
+                    url=node.get("url", ""),
+                    repo_name_with_owner=repo_name,
+                    author=author_login,
+                    is_draft=node.get("isDraft", False),
+                    state=node.get("state", "OPEN"),
+                    created_at=node.get("createdAt", ""),
+                    updated_at=node.get("updatedAt", ""),
+                    additions=node.get("additions", 0),
+                    deletions=node.get("deletions", 0),
+                    changed_files_count=node.get("changedFiles", len(files)),
+                    ci_status=ci_status,
+                    requested_reviewers=requested,
+                    reviews=reviews,
+                    files=files,
+                )
+            )
+
+        return results
