@@ -5,17 +5,16 @@ Provides a CLI command suite and terminal formatting to present prioritized pull
 ## Requirements
 
 ### Requirement: Display Prioritized Review Queue
-The system SHALL provide a CLI command to fetch, score, rank, and display actionable review requests in a formatted terminal table.
+The system SHALL launch an interactive full-screen terminal user interface directly when invoked as `gitkeeper` without requiring any subcommands.
 
-#### Scenario: Display queue of prioritized PRs
-- **WHEN** user executes `gitkeeper queue` (or `gitkeeper list`)
-- **THEN** the system SHALL display a ranked table of PRs with columns for Score, PR number, Repository, Author, Title, and Rationale
-- **AND** the PR number column SHALL be formatted as a clickable terminal hyperlink to the PR URL when a URL is available
+#### Scenario: Launch interactive TUI review queue
+- **WHEN** user executes `gitkeeper`
+- **THEN** the system SHALL directly launch the interactive full-screen TUI with the prioritized list of review requests
 
 #### Scenario: Hide low-relevance ambient PRs below threshold
 - **WHEN** PRs score below `min_score_threshold`
-- **THEN** the system SHALL exclude them from the default view and display a count of hidden ambient PRs with a suggestion to use `--all`
+- **THEN** the system SHALL exclude them from the primary queue view and indicate ambient PRs with a toggle or filter to view them within the TUI
 
 #### Scenario: View all PRs including low-relevance ones
-- **WHEN** user executes `gitkeeper queue --all`
-- **THEN** the system SHALL render all actionable PRs regardless of score threshold
+- **WHEN** user toggles ambient PRs within the TUI
+- **THEN** the system SHALL display all actionable PRs regardless of score threshold
