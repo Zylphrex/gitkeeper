@@ -9,6 +9,7 @@ query GetReviewRequests($query: String!) {
         id
         number
         title
+        body
         url
         isDraft
         state

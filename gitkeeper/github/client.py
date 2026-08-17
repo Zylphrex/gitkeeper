@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from gitkeeper.github.auth import AuthProvider
 from gitkeeper.github.queries import REVIEW_REQUESTS_QUERY, VIEWER_QUERY
+from gitkeeper.github.mutations import ADD_PULL_REQUEST_REVIEW_MUTATION
 
 
 @dataclass
@@ -43,15 +44,29 @@ class PullRequestData:
     deletions: int
     changed_files_count: int
     ci_status: Optional[str]  # e.g., 'SUCCESS', 'FAILURE', 'PENDING', None
+    body: str = ""
     requested_reviewers: List[ReviewerRequest] = field(default_factory=list)
     reviews: List[ReviewRecord] = field(default_factory=list)
     files: List[PullRequestFile] = field(default_factory=list)
 
 
+@dataclass
+class DraftReviewComment:
+    path: str
+    line: int
+    body: str
+
+
 class GitHubGraphQLClient:
-    def __init__(self, auth_provider: AuthProvider, endpoint: str = "https://api.github.com/graphql"):
+    def __init__(
+        self,
+        auth_provider: AuthProvider,
+        endpoint: str = "https://api.github.com/graphql",
+        rest_endpoint: str = "https://api.github.com",
+    ):
         self.auth_provider = auth_provider
         self.endpoint = endpoint
+        self.rest_endpoint = rest_endpoint
 
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         headers = self.auth_provider.get_auth_headers()
@@ -142,6 +157,7 @@ class GitHubGraphQLClient:
                     id=node.get("id", ""),
                     number=node.get("number", 0),
                     title=node.get("title", ""),
+                    body=node.get("body", "") or "",
                     url=node.get("url", ""),
                     repo_name_with_owner=repo_name,
                     author=author_login,
@@ -160,3 +176,46 @@ class GitHubGraphQLClient:
             )
 
         return results
+
+    def get_pull_request_diff(self, repo_name_with_owner: str, pull_number: int) -> str:
+        """Fetch unified diff text for a given pull request using GitHub REST API."""
+        headers = self.auth_provider.get_auth_headers()
+        headers["Accept"] = "application/vnd.github.v3.diff"
+        url = f"{self.rest_endpoint}/repos/{repo_name_with_owner}/pulls/{pull_number}"
+
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(url, headers=headers)
+            if response.status_code == 401:
+                raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
+            response.raise_for_status()
+            return response.text
+
+    def add_pull_request_review(
+        self,
+        pull_request_id: str,
+        event: str,  # 'APPROVE', 'REQUEST_CHANGES', 'COMMENT'
+        body: Optional[str] = None,
+        comments: Optional[List[DraftReviewComment]] = None,
+    ) -> Dict[str, Any]:
+        """Submit a pull request review mutation to GitHub GraphQL API."""
+        input_data: Dict[str, Any] = {
+            "pullRequestId": pull_request_id,
+            "event": event,
+        }
+        if body is not None:
+            input_data["body"] = body
+
+        if comments:
+            formatted_threads = []
+            for c in comments:
+                formatted_threads.append({
+                    "path": c.path,
+                    "line": c.line,
+                    "body": c.body,
+                })
+            input_data["threads"] = formatted_threads
+
+        return self._execute_query(
+            ADD_PULL_REQUEST_REVIEW_MUTATION,
+            {"input": input_data},
+        )
