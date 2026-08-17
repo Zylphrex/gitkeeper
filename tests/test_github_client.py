@@ -1,7 +1,7 @@
-import pytest
 import httpx
+import pytest
 from gitkeeper.github.auth import PersonalAccessTokenProvider
-from gitkeeper.github.client import GitHubGraphQLClient
+from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient
 
 
 def test_personal_access_token_provider():
@@ -24,6 +24,7 @@ def test_github_graphql_client_fetch(monkeypatch):
                         "id": "PR_kwDO123",
                         "number": 42,
                         "title": "Refactor authentication flow",
+                        "body": "PR description markdown",
                         "url": "https://github.com/myorg/repo/pull/42",
                         "isDraft": False,
                         "state": "OPEN",
@@ -75,6 +76,7 @@ def test_github_graphql_client_fetch(monkeypatch):
     pr = prs[0]
     assert pr.number == 42
     assert pr.title == "Refactor authentication flow"
+    assert pr.body == "PR description markdown"
     assert pr.author == "alice"
     assert pr.repo_name_with_owner == "myorg/repo"
     assert pr.is_draft is False
@@ -86,3 +88,67 @@ def test_github_graphql_client_fetch(monkeypatch):
     assert pr.requested_reviewers[1].is_team is True
     assert len(pr.files) == 2
     assert pr.files[0].path == "src/auth.py"
+
+
+def test_get_pull_request_diff(monkeypatch):
+    sample_diff = "diff --git a/file.py b/file.py\n--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new\n"
+
+    class MockTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            assert request.headers.get("Accept") == "application/vnd.github.v3.diff"
+            assert "repos/myorg/repo/pulls/42" in str(request.url)
+            return httpx.Response(200, text=sample_diff)
+
+    mock_client = httpx.Client(transport=MockTransport())
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: mock_client)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    diff = client.get_pull_request_diff("myorg/repo", 42)
+    assert diff == sample_diff
+
+
+def test_add_pull_request_review_mutation(monkeypatch):
+    recorded_requests = []
+
+    class MockTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            import json
+            payload = json.loads(request.content.decode("utf-8"))
+            recorded_requests.append(payload)
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "addPullRequestReview": {
+                            "pullRequestReview": {
+                                "id": "PRR_kw123",
+                                "state": "APPROVED",
+                                "url": "https://github.com/myorg/repo/pull/42#pullrequestreview-123",
+                            }
+                        }
+                    }
+                },
+            )
+
+    mock_client = httpx.Client(transport=MockTransport())
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: mock_client)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    comments = [DraftReviewComment(path="src/auth.py", line=15, body="Needs docstring")]
+    result = client.add_pull_request_review(
+        pull_request_id="PR_kwDO123",
+        event="APPROVE",
+        body="LGTM!",
+        comments=comments,
+    )
+
+    assert result["addPullRequestReview"]["pullRequestReview"]["id"] == "PRR_kw123"
+    assert len(recorded_requests) == 1
+    input_vars = recorded_requests[0]["variables"]["input"]
+    assert input_vars["pullRequestId"] == "PR_kwDO123"
+    assert input_vars["event"] == "APPROVE"
+    assert input_vars["body"] == "LGTM!"
+    assert len(input_vars["threads"]) == 1
+    assert input_vars["threads"][0]["path"] == "src/auth.py"
+    assert input_vars["threads"][0]["line"] == 15
+    assert input_vars["threads"][0]["body"] == "Needs docstring"
