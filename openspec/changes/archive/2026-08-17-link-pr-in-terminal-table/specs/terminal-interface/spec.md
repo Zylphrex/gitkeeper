@@ -1,8 +1,4 @@
-## Purpose
-
-Provides a CLI command suite and terminal formatting to present prioritized pull request queues with contextual rationale.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Display Prioritized Review Queue
 The system SHALL provide a CLI command to fetch, score, rank, and display actionable review requests in a formatted terminal table.

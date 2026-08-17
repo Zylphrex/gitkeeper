@@ -54,7 +54,10 @@ def render_pull_requests_table(
         else:
             score_str = f"[bold white]{score}[/bold white]"
 
-        pr_link = f"#{pr.number}"
+        if pr.url:
+            pr_link = f"[link={pr.url}]#{pr.number}[/link]"
+        else:
+            pr_link = f"#{pr.number}"
         repo_name = pr.repo_name_with_owner
         author_name = f"@{pr.author}"
         rationale = item.score.rationale
