@@ -144,6 +144,14 @@ class DiffViewer(Widget):
             return None
         return (self.file_diff.display_path, target_line)
 
+    def find_matching_lines(self, query: str) -> List[int]:
+        query_lower = query.lower()
+        matches: List[int] = []
+        for idx, line in enumerate(self._rendered_lines):
+            if query_lower in line.content.lower():
+                matches.append(idx)
+        return matches
+
 
 class PRDiffView(Widget):
     """File tree and diff viewer container."""
@@ -259,3 +267,45 @@ class PRDiffView(Widget):
         if info:
             file_path, line_no = info
             self.post_message(self.AddCommentRequest(file_path, line_no))
+
+    def filter_files(self, query: str) -> int:
+        self._full_file_diffs = self.file_diffs[:]
+        query_lower = query.lower()
+        matching = [f for f in self.file_diffs if query_lower in f.display_path.lower()]
+        self.file_diffs = matching
+        file_list = self.query_one("#file-option-list", OptionList)
+        file_list.clear_options()
+        for idx, fd in enumerate(matching):
+            badge = "[MOD]"
+            if fd.is_new:
+                badge = "[ADD]"
+            elif fd.is_deleted:
+                badge = "[DEL]"
+            elif fd.is_renamed:
+                badge = "[REN]"
+            file_list.add_option(Option(f"{badge} {fd.display_path}", id=f"file_{idx}"))
+        if matching:
+            file_list.highlighted = 0
+            diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+            diff_viewer.set_file_diff(matching[0], self.draft_comments)
+        return len(matching)
+
+    def clear_filter(self) -> None:
+        if hasattr(self, '_full_file_diffs') and self._full_file_diffs:
+            self.file_diffs = self._full_file_diffs[:]
+            self._full_file_diffs = []
+            file_list = self.query_one("#file-option-list", OptionList)
+            file_list.clear_options()
+            for idx, fd in enumerate(self.file_diffs):
+                badge = "[MOD]"
+                if fd.is_new:
+                    badge = "[ADD]"
+                elif fd.is_deleted:
+                    badge = "[DEL]"
+                elif fd.is_renamed:
+                    badge = "[REN]"
+                file_list.add_option(Option(f"{badge} {fd.display_path}", id=f"file_{idx}"))
+            if self.file_diffs:
+                file_list.highlighted = 0
+                diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+                diff_viewer.set_file_diff(self.file_diffs[0], self.draft_comments)

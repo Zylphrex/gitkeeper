@@ -108,3 +108,27 @@ class PRListView(Widget):
         if option_list.highlighted is not None and option_list.highlighted < len(self.active_prs):
             return self.active_prs[option_list.highlighted]
         return None
+
+    def filter_by_title(self, query: str) -> int:
+        self._full_active_prs = self.active_prs[:]
+        query_lower = query.lower()
+        matching = [p for p in self.active_prs if query_lower in p.pr.title.lower()]
+        self.active_prs = matching
+        option_list = self.query_one("#pr-option-list", OptionList)
+        option_list.clear_options()
+        self._populate_list(option_list, matching)
+        if matching:
+            option_list.highlighted = 0
+            self.post_message(self.PRSelected(matching[0]))
+        return len(matching)
+
+    def clear_filter(self) -> None:
+        if hasattr(self, '_full_active_prs') and self._full_active_prs:
+            self.active_prs = self._full_active_prs[:]
+            self._full_active_prs = []
+            option_list = self.query_one("#pr-option-list", OptionList)
+            option_list.clear_options()
+            self._populate_list(option_list, self.active_prs)
+            if self.active_prs:
+                option_list.highlighted = 0
+                self.post_message(self.PRSelected(self.active_prs[0]))
