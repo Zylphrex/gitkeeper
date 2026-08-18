@@ -44,6 +44,7 @@ class PullRequestData:
     deletions: int
     changed_files_count: int
     ci_status: Optional[str]  # e.g., 'SUCCESS', 'FAILURE', 'PENDING', None
+    pushed_at: Optional[str] = None  # latest commit committed date, ISO-8601
     base_ref: Optional[str] = None
     head_ref: Optional[str] = None
     body: str = ""
@@ -134,13 +135,16 @@ class GitHubGraphQLClient:
                     )
                 )
 
-            # Parse status check rollup
+            # Parse status check rollup and latest push time
             ci_status = None
+            pushed_at = None
             commits = node.get("commits", {}).get("nodes", [])
             if commits and commits[0].get("commit"):
-                rollup = commits[0]["commit"].get("statusCheckRollup")
+                commit = commits[0]["commit"]
+                rollup = commit.get("statusCheckRollup")
                 if rollup:
                     ci_status = rollup.get("state")  # e.g., SUCCESS, FAILURE, PENDING, ERROR
+                pushed_at = commit.get("committedDate")
 
             # Parse touched files
             files: List[PullRequestFile] = []
@@ -171,6 +175,7 @@ class GitHubGraphQLClient:
                     deletions=node.get("deletions", 0),
                     changed_files_count=node.get("changedFiles", len(files)),
                     ci_status=ci_status,
+                    pushed_at=pushed_at,
                     base_ref=node.get("baseRefName") or None,
                     head_ref=node.get("headRefName") or None,
                     requested_reviewers=requested,

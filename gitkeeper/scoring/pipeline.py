@@ -1,10 +1,15 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List, Optional
 from gitkeeper.config import Config
-from gitkeeper.git.inspector import inspect_path_touches
 from gitkeeper.github.client import PullRequestData
+from gitkeeper.git.inspector import inspect_path_touches
 from gitkeeper.repos import RepoLocator
-from gitkeeper.scoring.calculator import ScoreBreakdown, calculate_relevance_score
+from gitkeeper.scoring.calculator import (
+    ScoreBreakdown,
+    TriageTier,
+    assign_triage_tier,
+)
 from gitkeeper.scoring.gates import is_actionable
 
 
@@ -14,6 +19,26 @@ class ScoredPullRequest:
     score: ScoreBreakdown
     is_actionable: bool
     drop_reason: Optional[str] = None
+
+
+def _push_age_hours(pr: PullRequestData) -> float:
+    try:
+        pushed = datetime.fromisoformat(pr.pushed_at.replace("Z", "+00:00"))
+        return max(0.0, (datetime.now(timezone.utc) - pushed).total_seconds() / 3600.0)
+    except (ValueError, AttributeError):
+        return float("inf")
+
+
+def queue_sort_key(item: ScoredPullRequest) -> tuple:
+    """Deterministic ordering: actionable first, then tier, heat, size, repo, number."""
+    return (
+        not item.is_actionable,
+        item.score.tier if item.is_actionable else TriageTier.T3,
+        _push_age_hours(item.pr) if item.is_actionable else float("inf"),
+        (item.pr.additions + item.pr.deletions) if item.is_actionable else 0,
+        item.pr.repo_name_with_owner if item.is_actionable else "",
+        item.pr.number if item.is_actionable else 0,
+    )
 
 
 class RelevancePipeline:
@@ -59,8 +84,8 @@ class RelevancePipeline:
 
             touch_scores = list(touch_scores_dict.values())
 
-            # 3. Calculate Score Breakdown
-            score_breakdown = calculate_relevance_score(
+            # 3. Assign Triage Tier
+            score_breakdown = assign_triage_tier(
                 pr=pr,
                 touch_scores=touch_scores,
                 current_username=username,
@@ -77,6 +102,7 @@ class RelevancePipeline:
                 )
             )
 
-        # Sort actionable PRs highest score first, then non-actionable
-        results.sort(key=lambda item: (item.is_actionable, item.score.total_score), reverse=True)
+        # Sort actionable PRs first (priority tier, then heat, size, and a
+        # deterministic tie-break), with non-actionable PRs at the tail.
+        results.sort(key=queue_sort_key)
         return results

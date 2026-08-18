@@ -58,6 +58,7 @@ query GetReviewRequests($query: String!) {
               statusCheckRollup {
                 state
               }
+              committedDate
             }
           }
         }

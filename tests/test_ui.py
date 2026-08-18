@@ -14,7 +14,7 @@ from gitkeeper.github.client import (
     ReviewRecord,
     ReviewerRequest,
 )
-from gitkeeper.scoring.calculator import ScoreBreakdown
+from gitkeeper.scoring.calculator import ScoreBreakdown, TriageTier
 from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
 from gitkeeper.ui.diff_view import DiffViewer, PRDiffView
@@ -24,7 +24,7 @@ from gitkeeper.ui.modals import InlineCommentModal, SubmitReviewModal
 from gitkeeper.ui.overview_view import PROverviewView
 
 
-def _make_mock_scored_pr(number: int = 101, score_val: int = 85) -> ScoredPullRequest:
+def _make_mock_scored_pr(number: int = 101, tier: TriageTier = TriageTier.T1) -> ScoredPullRequest:
     pr = PullRequestData(
         id=f"PR_{number}",
         number=number,
@@ -43,10 +43,8 @@ def _make_mock_scored_pr(number: int = 101, score_val: int = 85) -> ScoredPullRe
         ci_status="SUCCESS",
     )
     score = ScoreBreakdown(
+        tier=tier,
         affinity_points=50.0,
-        assignment_points=25.0,
-        urgency_points=10.0,
-        total_score=score_val,
         rationale="Author teammate",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -90,10 +88,8 @@ def _make_mock_scored_pr_with_metadata() -> ScoredPullRequest:
         ],
     )
     score = ScoreBreakdown(
+        tier=TriageTier.T1,
         affinity_points=24.0,
-        assignment_points=30.0,
-        urgency_points=9.0,
-        total_score=64,
         rationale="You touched 3 of 7 files recently; CI is green.",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -139,19 +135,23 @@ async def test_pr_list_view_and_selection():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, 30),
-            _make_mock_scored_pr(101, 85),
-            _make_mock_scored_pr(103, 50),
+            _make_mock_scored_pr(102, TriageTier.T2),
+            _make_mock_scored_pr(101, TriageTier.T0),
+            _make_mock_scored_pr(103, TriageTier.T1),
         ],
     )
 
     async with app.run_test() as pilot:
         # Check initial widgets
         pr_list = app.query_one("#pr-list-view", PRListView)
-        # All 3 actionable PRs should be in active_prs sorted strictly descending by score
+        # All 3 actionable PRs should be in active_prs sorted by tier (T0 first)
         assert len(pr_list.active_prs) == 3
         assert [p.pr.number for p in pr_list.active_prs] == [101, 103, 102]
-        assert [p.score.total_score for p in pr_list.active_prs] == [85, 50, 30]
+        assert [p.score.tier for p in pr_list.active_prs] == [
+            TriageTier.T0,
+            TriageTier.T1,
+            TriageTier.T2,
+        ]
 
         overview = app.query_one("#pr-overview-view", PROverviewView)
         assert overview.scored_pr is not None
@@ -159,9 +159,9 @@ async def test_pr_list_view_and_selection():
 
         # Test preserving selection across updates
         app._load_scored_prs([
-            _make_mock_scored_pr(104, 90),
-            _make_mock_scored_pr(101, 80),
-            _make_mock_scored_pr(105, 20),
+            _make_mock_scored_pr(104, TriageTier.T0),
+            _make_mock_scored_pr(101, TriageTier.T1),
+            _make_mock_scored_pr(105, TriageTier.T2),
         ])
         assert overview.scored_pr.pr.number == 101
         assert [p.pr.number for p in pr_list.active_prs] == [104, 101, 105]
@@ -188,7 +188,7 @@ async def test_pr_diff_view_and_inline_comment():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, 85)],
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
     )
 
     async with app.run_test() as pilot:
@@ -261,7 +261,7 @@ async def test_modals_interaction():
     assert review_modal.pending_comments_count == 2
 
 
-def _make_mock_scored_pr_with_title(number: int, score_val: int, title: str) -> ScoredPullRequest:
+def _make_mock_scored_pr_with_title(number: int, tier: TriageTier, title: str) -> ScoredPullRequest:
     pr = PullRequestData(
         id=f"PR_{number}",
         number=number,
@@ -280,10 +280,8 @@ def _make_mock_scored_pr_with_title(number: int, score_val: int, title: str) -> 
         ci_status="SUCCESS",
     )
     score = ScoreBreakdown(
+        tier=tier,
         affinity_points=50.0,
-        assignment_points=25.0,
-        urgency_points=10.0,
-        total_score=score_val,
         rationale="Author teammate",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -295,9 +293,9 @@ async def test_vim_jk_moves_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, 30),
-            _make_mock_scored_pr(101, 85),
-            _make_mock_scored_pr(103, 50),
+            _make_mock_scored_pr(102, TriageTier.T2),
+            _make_mock_scored_pr(101, TriageTier.T0),
+            _make_mock_scored_pr(103, TriageTier.T1),
         ],
     )
     async with app.run_test() as pilot:
@@ -325,11 +323,11 @@ async def test_vim_gg_G_jumps_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, 30),
-            _make_mock_scored_pr(101, 85),
-            _make_mock_scored_pr(103, 50),
-            _make_mock_scored_pr(104, 70),
-            _make_mock_scored_pr(105, 60),
+            _make_mock_scored_pr(102, TriageTier.T3),
+            _make_mock_scored_pr(101, TriageTier.T0),
+            _make_mock_scored_pr(103, TriageTier.T2),
+            _make_mock_scored_pr(104, TriageTier.T1),
+            _make_mock_scored_pr(105, TriageTier.T3),
         ],
     )
     async with app.run_test() as pilot:
@@ -353,8 +351,8 @@ async def test_vim_h_l_focus_movement():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, 30),
-            _make_mock_scored_pr(101, 85),
+            _make_mock_scored_pr(102, TriageTier.T1),
+            _make_mock_scored_pr(101, TriageTier.T0),
         ],
     )
     async with app.run_test() as pilot:
@@ -391,7 +389,7 @@ async def test_vim_h_l_boundary():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, 30),
+            _make_mock_scored_pr(102, TriageTier.T2),
         ],
     )
     async with app.run_test() as pilot:
@@ -421,9 +419,9 @@ async def test_vim_search_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr_with_title(101, 85, "OAuth2 implementation"),
-            _make_mock_scored_pr_with_title(102, 50, "Fix database migration"),
-            _make_mock_scored_pr_with_title(103, 70, "Update OAuth2 docs"),
+            _make_mock_scored_pr_with_title(101, TriageTier.T0, "OAuth2 implementation"),
+            _make_mock_scored_pr_with_title(102, TriageTier.T1, "Fix database migration"),
+            _make_mock_scored_pr_with_title(103, TriageTier.T0, "Update OAuth2 docs"),
         ],
     )
     async with app.run_test() as pilot:
@@ -455,9 +453,9 @@ async def test_vim_search_n_navigate():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr_with_title(101, 85, "Alpha feature"),
-            _make_mock_scored_pr_with_title(102, 50, "Beta release"),
-            _make_mock_scored_pr_with_title(103, 70, "Alpha refactor"),
+            _make_mock_scored_pr_with_title(101, TriageTier.T0, "Alpha feature"),
+            _make_mock_scored_pr_with_title(102, TriageTier.T1, "Beta release"),
+            _make_mock_scored_pr_with_title(103, TriageTier.T2, "Alpha refactor"),
         ],
     )
     async with app.run_test() as pilot:
@@ -491,8 +489,8 @@ async def test_vim_escape_clears_search():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr_with_title(101, 85, "OAuth2 implementation"),
-            _make_mock_scored_pr_with_title(102, 50, "Fix database migration"),
+            _make_mock_scored_pr_with_title(101, TriageTier.T0, "OAuth2 implementation"),
+            _make_mock_scored_pr_with_title(102, TriageTier.T1, "Fix database migration"),
         ],
     )
     async with app.run_test() as pilot:
@@ -522,7 +520,7 @@ async def test_vim_escape_closes_modal():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, 85)],
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
     )
     async with app.run_test() as pilot:
         app.push_screen(InlineCommentModal("auth/jwt.py", 10))
@@ -541,7 +539,7 @@ async def test_vim_keys_do_not_fire_in_modal():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, 85)],
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
     )
     async with app.run_test() as pilot:
         pr_list = app.query_one("#pr-option-list", OptionList)

@@ -50,7 +50,7 @@ def test_github_graphql_client_fetch(monkeypatch):
                         },
                         "commits": {
                             "nodes": [
-                                {"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}
+                                {"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "committedDate": "2026-08-16T11:30:00Z"}}
                             ]
                         },
                         "files": {
@@ -83,6 +83,7 @@ def test_github_graphql_client_fetch(monkeypatch):
     assert pr.repo_name_with_owner == "myorg/repo"
     assert pr.is_draft is False
     assert pr.ci_status == "SUCCESS"
+    assert pr.pushed_at == "2026-08-16T11:30:00Z"
     assert pr.base_ref == "main"
     assert pr.head_ref == "feature/auth-refactor"
     assert len(pr.requested_reviewers) == 2

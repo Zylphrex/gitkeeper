@@ -1,8 +1,4 @@
-## Purpose
-
-Evaluates pull requests against actionability filters, local git affinity scores, assignment types, and urgency heuristics to compute a composite relevance score.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Actionability Gating
 The system SHALL filter out pull requests that are not currently ready or actionable for the user to review, while keeping recently-active previously-reviewed pull requests in the actionable queue as re-review items.

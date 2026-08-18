@@ -116,10 +116,7 @@ class GitkeeperApp(App):
     def compose(self) -> ComposeResult:
         yield AppHeader(id="app-header")
         with Horizontal(id="main-container"):
-            yield PRListView(
-                min_threshold=self.config.heuristics.min_score_threshold,
-                id="pr-list-view",
-            )
+            yield PRListView(id="pr-list-view")
             with TabbedContent(id="right-tabs"):
                 with TabPane("Files & Diff", id="tab-diff"):
                     yield PRDiffView(id="pr-diff-view")

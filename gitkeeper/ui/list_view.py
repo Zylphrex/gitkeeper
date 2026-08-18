@@ -7,7 +7,21 @@ from textual.widget import Widget
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
-from gitkeeper.scoring.pipeline import ScoredPullRequest
+from gitkeeper.scoring.calculator import TriageTier
+from gitkeeper.scoring.pipeline import ScoredPullRequest, queue_sort_key
+
+
+TIER_LABELS = {
+    TriageTier.T0: ("T0", "bold red"),
+    TriageTier.T1: ("T1", "bold yellow"),
+    TriageTier.T2: ("T2", "white"),
+    TriageTier.T3: ("T3", "bright_black"),
+}
+
+
+def _tier_style(tier: TriageTier) -> tuple[str, str]:
+    label, style = TIER_LABELS.get(tier, TIER_LABELS[TriageTier.T3])
+    return label, style
 
 
 class PRListView(Widget):
@@ -30,9 +44,8 @@ class PRListView(Widget):
             super().__init__()
             self.scored_pr = scored_pr
 
-    def __init__(self, min_threshold: int = 40, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.min_threshold = min_threshold
         self.all_scored_prs: List[ScoredPullRequest] = []
         self.active_prs: List[ScoredPullRequest] = []
 
@@ -46,12 +59,8 @@ class PRListView(Widget):
     ) -> None:
         self.all_scored_prs = scored_prs
         actionable_prs = [p for p in scored_prs if p.is_actionable]
-        # Sort actionable PRs strictly descending by relevance score
-        self.active_prs = sorted(
-            actionable_prs,
-            key=lambda p: p.score.total_score,
-            reverse=True,
-        )
+        # Sort actionable PRs by the shared pipeline key (tier, heat, size, ties)
+        self.active_prs = sorted(actionable_prs, key=queue_sort_key)
 
         option_list = self.query_one("#pr-option-list", OptionList)
         option_list.clear_options()
@@ -73,14 +82,15 @@ class PRListView(Widget):
 
     def _populate_list(self, option_list: OptionList, prs: List[ScoredPullRequest]) -> None:
         for idx, item in enumerate(prs):
-            score = item.score.total_score
-            score_color = "green" if score >= 75 else ("yellow" if score >= 50 else "white")
+            tier = item.score.tier
+            label, style = _tier_style(tier)
+            reason = item.score.reasons[0] if item.score.reasons else "actionable"
 
             text = Text()
-            text.append(f"[{score:2d}] ", style=f"bold {score_color}")
+            text.append(f"[{label}] ", style=f"bold {style}")
             text.append(f"#{item.pr.number} ", style="bold cyan")
             text.append(f"{item.pr.repo_name_with_owner.split('/')[-1]}\n", style="magenta")
-            text.append(f"     {item.pr.title[:30]}", style="white")
+            text.append(f"     {item.pr.title[:22]} ({reason})", style="white")
 
             option_list.add_option(Option(text, id=f"pr_{item.pr.number}_{idx}"))
 

@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 import yaml
+
+log = logging.getLogger("gitkeeper.config")
 
 
 class GitHubConfig(BaseModel):
@@ -22,8 +25,11 @@ class RepositoriesConfig(BaseModel):
 
 class HeuristicsConfig(BaseModel):
     lookback_days: int = Field(default=180, description="Git history lookback in days")
-    min_score_threshold: int = Field(
-        default=40, description="Minimum score to show in primary queue"
+    hot_window_hours: int = Field(
+        default=6, description="Author pushes within this window count as hot"
+    )
+    min_affinity_files: int = Field(
+        default=1, description="Minimum touched files to qualify as T2 team-affinity"
     )
     ignore_drafts: bool = Field(default=True, description="Filter out draft PRs")
     ignore_failing_ci: bool = Field(default=True, description="Filter out failing CI PRs")
@@ -100,6 +106,14 @@ def load_config(config_path: Optional[Path] = None) -> Config:
                 pass
 
     expanded_data = _expand_env_vars(raw_data)
+
+    heuristics = expanded_data.get("heuristics") if isinstance(expanded_data.get("heuristics"), dict) else {}
+    if "min_score_threshold" in heuristics:
+        log.warning(
+            "heuristics.min_score_threshold is deprecated and no longer used; "
+            "PRs are no longer hidden by a score threshold. Remove the key from your config."
+        )
+
     config = Config.model_validate(expanded_data)
 
     # Fallback to GITHUB_TOKEN / GITHUB_USER if not set in config

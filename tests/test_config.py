@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -25,7 +26,8 @@ github:
   user: "$TEST_GH_USER"
 heuristics:
   lookback_days: 90
-  min_score_threshold: 50
+  hot_window_hours: 12
+  min_affinity_files: 2
 """
     )
 
@@ -33,7 +35,23 @@ heuristics:
     assert cfg.github.token == "ghp_secret123"
     assert cfg.github.user == "octocat"
     assert cfg.heuristics.lookback_days == 90
-    assert cfg.heuristics.min_score_threshold == 50
+    assert cfg.heuristics.hot_window_hours == 12
+    assert cfg.heuristics.min_affinity_files == 2
+
+
+def test_deprecated_min_score_threshold_warns(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("TEST_GH_TOKEN", "ghp_secret123")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        """
+heuristics:
+  min_score_threshold: 40
+"""
+    )
+    with caplog.at_level(logging.WARNING, logger="gitkeeper.config"):
+        cfg = load_config(config_file)
+    assert "min_score_threshold" in caplog.text
+    assert not hasattr(cfg.heuristics, "min_score_threshold")
 
 
 def test_repo_locator_explicit_mapping(tmp_path):

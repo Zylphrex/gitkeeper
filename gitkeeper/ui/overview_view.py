@@ -8,7 +8,22 @@ from textual.widget import Widget
 from textual.widgets import Label, Markdown
 
 from gitkeeper.github.client import ReviewRecord, ReviewerRequest
+from gitkeeper.scoring.calculator import TriageTier
 from gitkeeper.scoring.pipeline import ScoredPullRequest
+
+TIER_TITLES = {
+    TriageTier.T0: "T0 — you're the merge blocker",
+    TriageTier.T1: "T1 — someone is waiting on you",
+    TriageTier.T2: "T2 — the team's, but it's your code",
+    TriageTier.T3: "T3 — anything goes",
+}
+
+TIER_COLORS = {
+    TriageTier.T0: "bold red",
+    TriageTier.T1: "bold yellow",
+    TriageTier.T2: "white",
+    TriageTier.T3: "bright_black",
+}
 
 
 def _ci_color(ci_status: Optional[str]) -> str:
@@ -218,10 +233,13 @@ class PROverviewView(Widget):
 
         meta_label.update("\n".join(meta_rows))
 
-        score_color = "green" if score.total_score >= 75 else ("yellow" if score.total_score >= 50 else "white")
-        rationale_label.update(f"Score: [bold {score_color}]{score.total_score}[/bold {score_color}] — {score.rationale}")
+        score_color = TIER_COLORS.get(score.tier, "white")
+        tier_title = TIER_TITLES.get(score.tier, f"Tier {score.tier.name}")
+        rationale_label.update(
+            f"[{score_color}]{tier_title}[/{score_color}]"
+        )
         breakdown_label.update(
-            f"[dim]Breakdown: Affinity: +{score.affinity_points} | Assignment: +{score.assignment_points} | Urgency: +{score.urgency_points}[/dim]"
+            f"[dim]{score.rationale}[/dim]"
         )
 
         body_content = pr.body if pr.body and pr.body.strip() else "_No description provided._"
