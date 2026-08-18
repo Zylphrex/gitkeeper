@@ -1,8 +1,4 @@
-## Purpose
-
-Provides a consistent Vim-inspired keyboard navigation system across all TUI widgets, enabling power users to navigate, focus, and search without leaving the home row.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Global Motion Keys
 The system SHALL provide Vim-style motion keys that work consistently across all scrollable and list-based widgets, with arrow keys `up`/`down` behaving identically to `j`/`k`.
@@ -52,36 +48,3 @@ The system SHALL allow moving focus between UI panes using directional keys, wit
 - **THEN** focus SHALL remain unchanged (no-op)
 - **WHEN** focus is at the rightmost pane and the user presses `l` or `right`
 - **THEN** focus SHALL remain unchanged (no-op)
-
-### Requirement: Search and Filter
-The system SHALL provide a search mode activated by `/` that filters or highlights content in the focused widget.
-
-#### Scenario: Activate search with forward slash
-- **WHEN** the user presses `/`
-- **THEN** the system SHALL enter search mode, displaying a search prompt
-- **WHEN** the user types a query and presses Enter
-- **THEN** the system SHALL highlight or filter matching items in the focused widget
-
-#### Scenario: Navigate search results
-- **WHEN** search results are active
-- **THEN** pressing `n` SHALL jump to the next match
-- **AND** pressing `N` SHALL jump to the previous match
-
-#### Scenario: Dismiss search
-- **WHEN** the user presses Escape while in search mode
-- **THEN** the system SHALL clear the search prompt and exit search mode
-
-### Requirement: Escape as Universal Cancel
-The system SHALL use Escape as a consistent cancel/close/back action across all contexts.
-
-#### Scenario: Escape closes modals
-- **WHEN** a modal is open (e.g., InlineCommentModal, SubmitReviewModal)
-- **THEN** pressing Escape SHALL close the modal without accepting changes
-
-#### Scenario: Escape clears search
-- **WHEN** search mode is active
-- **THEN** pressing Escape SHALL clear the search and exit search mode
-
-#### Scenario: Escape has no effect in idle state
-- **WHEN** no modal or search is active and the user presses Escape
-- **THEN** the system SHALL do nothing (no-op)

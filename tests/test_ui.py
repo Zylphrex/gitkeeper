@@ -414,6 +414,133 @@ async def test_vim_h_l_boundary():
 
 
 @pytest.mark.asyncio
+async def test_arrow_up_down_moves_pr_list():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[
+            _make_mock_scored_pr(102, TriageTier.T2),
+            _make_mock_scored_pr(101, TriageTier.T0),
+            _make_mock_scored_pr(103, TriageTier.T1),
+        ],
+    )
+    async with app.run_test() as pilot:
+        pr_list = app.query_one("#pr-option-list", OptionList)
+        pr_list.focus()
+        await pilot.pause()
+        assert pr_list.highlighted == 0
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert pr_list.highlighted == 1
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert pr_list.highlighted == 2
+
+        await pilot.press("up")
+        await pilot.pause()
+        assert pr_list.highlighted == 1
+
+
+@pytest.mark.asyncio
+async def test_arrow_left_right_focus_movement():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[
+            _make_mock_scored_pr(102, TriageTier.T1),
+            _make_mock_scored_pr(101, TriageTier.T0),
+        ],
+    )
+    async with app.run_test() as pilot:
+        app.action_tab_diff()
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_MULTI_DIFF)
+
+        pr_list = app.query_one("#pr-option-list", OptionList)
+        pr_list.focus()
+        await pilot.pause()
+
+        await pilot.press("right")
+        await pilot.pause()
+        file_list = app.query_one("#file-option-list", OptionList)
+        assert app.focused is file_list
+
+        await pilot.press("right")
+        await pilot.pause()
+        diff_options = app.query_one("#diff-options", OptionList)
+        assert app.focused is diff_options
+
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.focused is file_list
+
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.focused is pr_list
+
+
+@pytest.mark.asyncio
+async def test_arrow_left_right_boundary():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[
+            _make_mock_scored_pr(102, TriageTier.T2),
+        ],
+    )
+    async with app.run_test() as pilot:
+        pr_list = app.query_one("#pr-option-list", OptionList)
+        pr_list.focus()
+        await pilot.pause()
+
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.focused is pr_list
+
+        app.action_tab_diff()
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_MULTI_DIFF)
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        await pilot.pause()
+
+        await pilot.press("right")
+        await pilot.pause()
+        assert app.focused is diff_options
+
+
+@pytest.mark.asyncio
+async def test_arrow_keys_move_cursor_in_modal():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        pr_list = app.query_one("#pr-option-list", OptionList)
+        pr_list.focus()
+        await pilot.pause()
+        assert pr_list.highlighted == 0
+
+        app.push_screen(InlineCommentModal("auth/jwt.py", 10))
+        await pilot.pause()
+
+        text_area = app.screen.query_one("#comment-input")
+        text_area.focus()
+        await pilot.pause()
+
+        text_area.insert("ab")
+        assert text_area.cursor_location[1] == 2
+        await pilot.press("left")
+        await pilot.pause()
+        assert text_area.cursor_location[1] == 1
+        assert app.focused is text_area
+        assert pr_list.highlighted == 0
+
+
+@pytest.mark.asyncio
 async def test_vim_search_pr_list():
     app = GitkeeperApp(
         config=Config(),
