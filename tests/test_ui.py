@@ -220,8 +220,6 @@ async def test_pr_diff_view_and_inline_comment():
     )
 
     async with app.run_test() as pilot:
-        # Switch to diff tab
-        app.action_tab_diff()
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         drafts = [DraftReviewComment(path="auth/jwt.py", line=3, body="Test comment")]
         diff_view.load_diff(SAMPLE_DIFF, drafts)
@@ -384,7 +382,6 @@ async def test_vim_h_l_focus_movement():
         ],
     )
     async with app.run_test() as pilot:
-        app.action_tab_diff()
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         diff_view.load_diff(SAMPLE_MULTI_DIFF)
 
@@ -429,7 +426,6 @@ async def test_vim_h_l_boundary():
         await pilot.pause()
         assert app.focused is pr_list
 
-        app.action_tab_diff()
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         diff_view.load_diff(SAMPLE_MULTI_DIFF)
         diff_options = app.query_one("#diff-options", OptionList)
@@ -482,7 +478,6 @@ async def test_arrow_left_right_focus_movement():
         ],
     )
     async with app.run_test() as pilot:
-        app.action_tab_diff()
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         diff_view.load_diff(SAMPLE_MULTI_DIFF)
 
@@ -527,7 +522,6 @@ async def test_arrow_left_right_boundary():
         await pilot.pause()
         assert app.focused is pr_list
 
-        app.action_tab_diff()
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         diff_view.load_diff(SAMPLE_MULTI_DIFF)
         diff_options = app.query_one("#diff-options", OptionList)

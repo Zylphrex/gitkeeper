@@ -5,7 +5,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Label, OptionList, TabbedContent, TabPane
+from textual.widgets import Footer, Input, Label, OptionList
 
 from gitkeeper.config import Config
 from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient, PullRequestData
@@ -74,7 +74,6 @@ class GitkeeperApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh_queue", "Refresh"),
         Binding("tab", "switch_focus", "Switch Pane", show=False),
-        Binding("2", "tab_diff", "Files & Diff"),
         Binding("c", "comment_action", "Comment"),
         Binding("a", "quick_approve", "Approve"),
         Binding("s", "submit_review", "Submit Review"),
@@ -123,9 +122,8 @@ class GitkeeperApp(App):
         yield AppHeader(id="app-header")
         with Horizontal(id="main-container"):
             yield PRListView(id="pr-list-view")
-            with TabbedContent(id="right-tabs"):
-                with TabPane("Files & Diff", id="tab-diff"):
-                    yield PRDiffView(id="pr-diff-view")
+            with Vertical(id="right-tabs"):
+                yield PRDiffView(id="pr-diff-view")
             yield PROverviewView(id="pr-overview-view")
         yield Input(id="search-input", placeholder="/ — search (Enter to confirm, Esc to cancel)")
         yield Label("Ready", id="status-bar")
@@ -317,10 +315,6 @@ class GitkeeperApp(App):
         target_zone = FOCUS_GRAPH[zone][direction]
         if target_zone is None:
             return
-        if target_zone == ZONE_RIGHT_SECONDARY:
-            tabs = self.query_one("#right-tabs", TabbedContent)
-            if tabs.active != "tab-diff":
-                return
         target_widget_id = self._widget_for_zone(target_zone)
         if target_widget_id is None:
             return
@@ -472,17 +466,9 @@ class GitkeeperApp(App):
             except Exception:
                 pass
 
-    def action_tab_diff(self) -> None:
-        tabs = self.query_one("#right-tabs", TabbedContent)
-        tabs.active = "tab-diff"
-
     def action_comment_action(self) -> None:
-        tabs = self.query_one("#right-tabs", TabbedContent)
-        if tabs.active == "tab-diff":
-            diff_view = self.query_one("#pr-diff-view", PRDiffView)
-            diff_view.prompt_add_comment()
-        else:
-            self.action_submit_review()
+        diff_view = self.query_one("#pr-diff-view", PRDiffView)
+        diff_view.prompt_add_comment()
 
     def on_pr_diff_view_add_comment_request(self, event: PRDiffView.AddCommentRequest) -> None:
         if not self.current_scored_pr:

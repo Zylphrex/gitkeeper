@@ -19,14 +19,16 @@ The system SHALL provide a full-screen interactive interface listing actionable 
 - **AND** the metadata SHALL be rendered in full: any metadata line that exceeds the overview panel width SHOULD wrap at the panel edge and never be clipped or overflow off-screen
 - **AND** the metadata SHALL include the repository, author, draft state, base and head branch refs, CI status, addition/deletion counts, changed file count, created date, relative time since last update, requested reviewers, a compact summary of existing reviews, and the latest author push time
 - **AND** the metadata and rationale boxes SHALL size to their content so the PR body retains the remaining panel height
-- **AND** the overview section SHALL remain visible while the user inspects the Files & Diff pane for the selected pull request
+- **AND** the overview section SHALL remain visible while the user inspects the diff pane for the selected pull request
 - **AND** the system SHALL synchronize the diff viewer with the newly selected pull request
 - **AND** the pull request number in the overview header SHALL be rendered as a clickable terminal hyperlink to the pull request URL when a URL is available
 
 #### Scenario: Overview is not a tab
-- **WHEN** the TUI application loads with the Files & Diff pane active
+- **WHEN** the TUI application loads
 - **THEN** the overview section SHALL be visible on the far right without requiring tab switching
 - **AND** the overview section SHALL NOT be selectable as a tab
+- **AND** the diff pane SHALL be rendered as a plain, always-visible pane without a labeled tab bar
+- **AND** the system SHALL NOT provide a dedicated keyboard shortcut for switching to the diff pane
 
 #### Scenario: Open selected PR in the web browser
 - **WHEN** the user presses the open-in-browser key (`o`) while a pull request is selected and a URL is available
