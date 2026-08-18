@@ -79,6 +79,13 @@ def _reviewer_label(reviewer: ReviewerRequest) -> str:
     return f"@{reviewer.login_or_slug}"
 
 
+def _pr_number_markup(number: int, url: Optional[str]) -> str:
+    """Render a PR number as a clickable hyperlink when a URL is available."""
+    if not url:
+        return f"[bold cyan]#{number}[/bold cyan]"
+    return f'[link="{url}"][bold cyan]#{number}[/bold cyan][/link]'
+
+
 def _reviewer_row(reviewers: List[ReviewerRequest]) -> Optional[str]:
     """Render the requested-reviewers row, capped at three names with a +N more suffix."""
     if not reviewers:
@@ -201,7 +208,9 @@ class PROverviewView(Widget):
         score = scored_pr.score
 
         draft_str = " [bold yellow][DRAFT][/bold yellow]" if pr.is_draft else ""
-        title_label.update(f"[bold cyan]#{pr.number}[/bold cyan] {pr.title}{draft_str}")
+        title_label.update(
+            f"{_pr_number_markup(pr.number, pr.url)} {pr.title}{draft_str}"
+        )
 
         meta_rows = [
             f"Repo: [magenta]{pr.repo_name_with_owner}[/magenta] · "

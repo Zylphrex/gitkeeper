@@ -24,6 +24,13 @@ def _tier_style(tier: TriageTier) -> tuple[str, str]:
     return label, style
 
 
+def _pr_number_text(number: int, url: Optional[str]) -> Text:
+    """Build the PR number span, hyperlinking to the PR URL when available."""
+    if url:
+        return Text(f"#{number} ", style=f"bold cyan link {url}")
+    return Text(f"#{number} ", style="bold cyan")
+
+
 class PRListView(Widget):
     """Ranked PR list widget displaying actionable PRs sorted by relevance score."""
 
@@ -88,7 +95,7 @@ class PRListView(Widget):
 
             text = Text()
             text.append(f"[{label}] ", style=f"bold {style}")
-            text.append(f"#{item.pr.number} ", style="bold cyan")
+            text.append_text(_pr_number_text(item.pr.number, item.pr.url))
             text.append(f"{item.pr.repo_name_with_owner.split('/')[-1]}\n", style="magenta")
             text.append(f"     {item.pr.title[:22]} ({reason})", style="white")
 

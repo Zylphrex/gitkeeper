@@ -61,6 +61,9 @@ class DraftReviewComment:
 
 
 class GitHubGraphQLClient:
+    PAGE_SIZE = 100
+    MAX_RESULTS = 2000
+
     def __init__(
         self,
         auth_provider: AuthProvider,
@@ -101,12 +104,35 @@ class GitHubGraphQLClient:
         """
         user_filter = username if username else "@me"
         search_query = f"is:open is:pr review-requested:{user_filter} archived:false"
-        data = self._execute_query(REVIEW_REQUESTS_QUERY, {"query": search_query})
 
-        nodes = data.get("search", {}).get("nodes", [])
+        seen_ids: set = set()
+        all_nodes: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+
+        while True:
+            variables: Dict[str, Any] = {"query": search_query}
+            if cursor:
+                variables["cursor"] = cursor
+            data = self._execute_query(REVIEW_REQUESTS_QUERY, variables)
+
+            search = data.get("search", {})
+            nodes = search.get("nodes", [])
+
+            for node in nodes:
+                node_id = node.get("id", "")
+                if node_id in seen_ids:
+                    continue
+                seen_ids.add(node_id)
+                all_nodes.append(node)
+
+            page_info = search.get("pageInfo") or {}
+            if not page_info.get("hasNextPage") or len(all_nodes) >= self.MAX_RESULTS:
+                break
+            cursor = page_info.get("endCursor")
+
         results: List[PullRequestData] = []
 
-        for node in nodes:
+        for node in all_nodes:
             if not node or not isinstance(node, dict) or "number" not in node:
                 continue
 

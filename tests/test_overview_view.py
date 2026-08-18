@@ -3,10 +3,24 @@ from datetime import datetime, timezone
 from gitkeeper.github.client import ReviewRecord, ReviewerRequest
 from gitkeeper.ui.overview_view import (
     _ci_color,
+    _pr_number_markup,
     _relative_time,
     _reviewer_row,
     _reviews_row,
 )
+
+
+def test_pr_number_markup_with_url():
+    url = "https://github.com/acme/backend/pull/101"
+    assert _pr_number_markup(101, url) == (
+        f'[link="{url}"][bold cyan]#101[/bold cyan][/link]'
+    )
+
+
+def test_pr_number_markup_without_url():
+    expected = "[bold cyan]#101[/bold cyan]"
+    assert _pr_number_markup(101, None) == expected
+    assert _pr_number_markup(101, "") == expected
 
 
 def test_ci_color_mapping():

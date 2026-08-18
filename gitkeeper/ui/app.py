@@ -78,6 +78,7 @@ class GitkeeperApp(App):
         Binding("c", "comment_action", "Comment"),
         Binding("a", "quick_approve", "Approve"),
         Binding("s", "submit_review", "Submit Review"),
+        Binding("o", "open_browser", "Open in Browser"),
         Binding("j", "vim_down", "Down", show=False),
         Binding("down", "vim_down", "Down", show=False),
         Binding("k", "vim_up", "Up", show=False),
@@ -511,6 +512,19 @@ class GitkeeperApp(App):
         pending_comments = self.draft_comments.get(pr_key, [])
 
         self._submit_review_worker(pr.id, "APPROVE", "LGTM!", pending_comments, pr_key)
+
+    def action_open_browser(self) -> None:
+        if self._guard_vim_action():
+            return
+        if not self.current_scored_pr:
+            self._set_status("No PR selected.")
+            return
+        url = self.current_scored_pr.pr.url
+        if not url:
+            self._set_status("No URL available for this PR.")
+            return
+        self.app.open_url(url)
+        self._set_status(f"Opening {url} in browser...")
 
     def action_submit_review(self) -> None:
         if not self.current_scored_pr:

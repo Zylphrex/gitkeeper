@@ -1,9 +1,13 @@
 """GitHub GraphQL query definitions."""
 
 REVIEW_REQUESTS_QUERY = """
-query GetReviewRequests($query: String!) {
-  search(query: $query, type: ISSUE, first: 50) {
+query GetReviewRequests($query: String!, $cursor: String) {
+  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
     issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
     nodes {
       ... on PullRequest {
         id

@@ -11,6 +11,7 @@ The system SHALL provide a full-screen interactive interface listing actionable 
 - **THEN** the system SHALL display the complete ordered list of actionable pull requests in the left panel sorted by triage tier (top tier first), then by author activity heat (hottest first), then by review size (smallest first), then deterministically
 - **AND** each entry SHALL display its triage tier label, repository name, and pull request number instead of a numeric composite score
 - **AND** the user SHALL be able to select and highlight different pull requests using Vim-style navigation keys (`j`/`k` for up/down, `gg`/`G` for top/bottom, `Ctrl+d`/`Ctrl+u` for paging), arrow keys, or mouse selection
+- **AND** the pull request number in each entry SHALL be rendered as a clickable terminal hyperlink to the pull request URL when a URL is available
 
 #### Scenario: Display selected PR overview and rationale
 - **WHEN** a pull request is selected or clicked in the queue list
@@ -20,11 +21,27 @@ The system SHALL provide a full-screen interactive interface listing actionable 
 - **AND** the metadata and rationale boxes SHALL size to their content so the PR body retains the remaining panel height
 - **AND** the overview section SHALL remain visible while the user inspects the Files & Diff pane for the selected pull request
 - **AND** the system SHALL synchronize the diff viewer with the newly selected pull request
+- **AND** the pull request number in the overview header SHALL be rendered as a clickable terminal hyperlink to the pull request URL when a URL is available
 
 #### Scenario: Overview is not a tab
 - **WHEN** the TUI application loads with the Files & Diff pane active
 - **THEN** the overview section SHALL be visible on the far right without requiring tab switching
 - **AND** the overview section SHALL NOT be selectable as a tab
+
+#### Scenario: Open selected PR in the web browser
+- **WHEN** the user presses the open-in-browser key (`o`) while a pull request is selected and a URL is available
+- **THEN** the system SHALL open the selected pull request's GitHub URL in the default web browser
+- **AND** the system SHALL NOT change the current selection, focus, or any in-progress draft comments
+
+#### Scenario: Open selected PR with no URL
+- **WHEN** the user presses the open-in-browser key (`o`) while the selected pull request has no URL
+- **THEN** the system SHALL report that no URL is available for the pull request
+- **AND** the system SHALL NOT attempt to open a browser
+
+#### Scenario: Open selected PR with nothing selected
+- **WHEN** the user presses the open-in-browser key (`o`) while no pull request is selected
+- **THEN** the system SHALL report that no pull request is selected
+- **AND** the system SHALL NOT attempt to open a browser
 ### Requirement: In-TUI Diff Viewer
 The system SHALL provide an interactive diff viewer allowing users to inspect file changes and patches for the selected pull request directly within the terminal interface.
 

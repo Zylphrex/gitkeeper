@@ -6,7 +6,7 @@ import pytest
 from typing import Optional
 from rich.console import Console
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Markdown, OptionList
+from textual.widgets import Input, Label, Markdown, OptionList
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
 from gitkeeper.github.client import (
@@ -20,7 +20,7 @@ from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
 from gitkeeper.ui.diff_view import DiffViewer, PRDiffView
 from gitkeeper.ui.header import AppHeader
-from gitkeeper.ui.list_view import PRListView
+from gitkeeper.ui.list_view import PRListView, _pr_number_text
 from gitkeeper.ui.modals import InlineCommentModal, SubmitReviewModal
 from gitkeeper.ui.overview_view import PROverviewView
 
@@ -136,6 +136,22 @@ diff --git a/tests/test_util.py b/tests/test_util.py
 +def test_helper():
 +    pass
 """
+
+
+def test_pr_number_text_hyperlink_with_url():
+    console = Console()
+    url = "https://github.com/acme/backend/pull/101"
+    text = _pr_number_text(101, url)
+    assert text.get_style_at_offset(console, 0).link == url
+    assert str(text) == "#101 "
+
+
+def test_pr_number_text_plain_without_url():
+    console = Console()
+    text = _pr_number_text(102, None)
+    assert text.get_style_at_offset(console, 0).link is None
+    text_blank = _pr_number_text(102, "")
+    assert text_blank.get_style_at_offset(console, 0).link is None
 
 
 @pytest.mark.asyncio
@@ -892,3 +908,88 @@ async def test_pr_overview_placeholder_when_no_selection():
         rendered = _render_app_to_text(app)
 
     assert "No pull request selected" in rendered
+
+
+def _patch_open_url(monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        GitkeeperApp,
+        "open_url",
+        lambda self, url, **kwargs: opened.append(url),
+    )
+    return opened
+
+
+def _status_text(app: GitkeeperApp) -> str:
+    return app.query_one("#status-bar", Label).content
+
+
+@pytest.mark.asyncio
+async def test_open_browser_key_opens_selected_pr(monkeypatch):
+    opened = _patch_open_url(monkeypatch)
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option_list.focus()
+        await pilot.pause()
+
+        await pilot.press("o")
+        await pilot.pause()
+
+        assert opened == ["https://github.com/acme/backend/pull/101"]
+        assert "Opening https://github.com/acme/backend/pull/101" in _status_text(app)
+
+
+@pytest.mark.asyncio
+async def test_open_browser_no_url_reports(monkeypatch):
+    opened = _patch_open_url(monkeypatch)
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.current_scored_pr.pr.url = None
+        app.action_open_browser()
+        await pilot.pause()
+        status = _status_text(app)
+
+    assert opened == []
+    assert "No URL available" in status
+
+
+@pytest.mark.asyncio
+async def test_open_browser_no_selection_reports(monkeypatch):
+    opened = _patch_open_url(monkeypatch)
+    app = GitkeeperApp(config=Config(), client=None, scored_prs=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_open_browser()
+        await pilot.pause()
+        status = _status_text(app)
+
+    assert opened == []
+    assert "No PR selected" in status
+
+
+@pytest.mark.asyncio
+async def test_open_browser_noop_when_modal_open(monkeypatch):
+    opened = _patch_open_url(monkeypatch)
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(InlineCommentModal("auth/jwt.py", 10))
+        await pilot.pause()
+        app.action_open_browser()
+        await pilot.pause()
+
+    assert opened == []
