@@ -10,12 +10,11 @@ The system SHALL provide a full-screen interactive interface listing actionable 
 #### Scenario: Navigate ranked pull requests
 - **WHEN** the TUI application loads
 - **THEN** the system SHALL display the complete ranked list of actionable pull requests in the left panel sorted descending by relevance score with relevance scores, repository names, and authors
-- **AND** the user SHALL be able to select and highlight different pull requests using keyboard navigation (e.g. arrow keys or j/k) or mouse selection
+- **AND** the user SHALL be able to select and highlight different pull requests using Vim-style navigation keys (`j`/`k` for up/down, `gg`/`G` for top/bottom, `Ctrl+d`/`Ctrl+u` for paging) or arrow keys or mouse selection
 
 #### Scenario: Display selected PR overview and rationale
 - **WHEN** a pull request is selected or clicked in the queue list
-- **THEN** the system SHALL display the PR metadata, full description, and detailed scoring rationale breakdown in a persistent overview section on the far right
-- **AND** the overview section SHALL remain visible while the user inspects the Files & Diff pane for the selected pull request
+- **THEN** the system SHALL display the PR metadata, full description, and detailed scoring rationale breakdown in the right overview panel
 - **AND** the system SHALL synchronize the diff viewer with the newly selected pull request
 
 #### Scenario: Overview is not a tab
@@ -32,7 +31,8 @@ The system SHALL provide an interactive diff viewer allowing users to inspect fi
 
 #### Scenario: Navigate through diff hunks and files
 - **WHEN** inspecting a diff
-- **THEN** the user SHALL be able to navigate between files and scroll through diff lines with keyboard controls
+- **THEN** the user SHALL be able to navigate between files and scroll through diff lines with Vim-style navigation keys (`j`/`k` for up/down lines, `gg`/`G` for top/bottom, `Ctrl+d`/`Ctrl+u` for paging) and arrow keys
+- **AND** the user SHALL be able to switch focus between the file list and the diff viewer using `h`/`l`
 
 ### Requirement: Inline and Top-Level Commenting
 The system SHALL allow users to author inline review comments on specific diff lines as well as top-level review comments from within the interface.
@@ -77,6 +77,7 @@ The system SHALL display an application header indicating active background task
 #### Scenario: Display active background operation
 - **WHEN** a queue refresh or initial fetch is executing in the background
 - **THEN** the header SHALL display an active status message describing the current stage (e.g. fetching GitHub data or scoring relevance)
+- **AND** the message SHALL lead with an animated spinner that cycles through frames while the operation is active
 
 ### Requirement: Diff View Asynchronous Loading State
 The system SHALL provide explicit visual loading indicators in the diff viewer when fetching patches asynchronously.
@@ -84,7 +85,9 @@ The system SHALL provide explicit visual loading indicators in the diff viewer w
 #### Scenario: Display loading state while fetching diff
 - **WHEN** a pull request is selected whose diff is not currently cached
 - **THEN** the diff view SHALL display a loading indicator until the patch data is retrieved and rendered
+- **AND** the loading indicator SHALL animate while the patch is being fetched
 
 #### Scenario: Display error state on diff fetch failure
 - **WHEN** fetching a pull request patch fails
 - **THEN** the diff view SHALL display a clear error message explaining the failure
+- **AND** the loading indicator SHALL stop animating
