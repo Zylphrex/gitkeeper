@@ -11,6 +11,7 @@ from textual.widgets.option_list import Option
 from gitkeeper.diff.parser import DiffLine, FileDiff, UnifiedDiffParser
 from gitkeeper.github.client import DraftReviewComment
 from gitkeeper.ui.modals import InlineCommentModal
+from gitkeeper.ui.spinner import SPINNER_FRAMES, SpinnerMixin
 
 
 class DiffViewer(Widget):
@@ -48,6 +49,8 @@ class DiffViewer(Widget):
         super().__init__(**kwargs)
         self.draft_comments: Dict[str, List[DraftReviewComment]] = {}
         self._rendered_lines: List[DiffLine] = []
+        self._loading_header_text: Optional[str] = None
+        self._loading_option_text: str = ""
 
     def compose(self) -> ComposeResult:
         yield Label("No file selected", id="diff-header")
@@ -62,8 +65,21 @@ class DiffViewer(Widget):
         self.file_diff = None
 
         text = f"Fetching diff for {pr_identifier}..." if pr_identifier else "Fetching diff..."
-        header.update(f"⠋ {text}")
-        loading_text = Text(f"\n  ⠋ Loading diff lines from GitHub...\n", style="dim italic")
+        self._loading_header_text = text
+        self._loading_option_text = "Loading diff lines from GitHub..."
+        header.update(f"{SPINNER_FRAMES[0]} {text}")
+        loading_text = Text(f"\n  {SPINNER_FRAMES[0]} {self._loading_option_text}\n", style="dim italic")
+        options.add_option(Option(loading_text, disabled=True))
+
+    def render_loading_frame(self, frame: str) -> None:
+        """Re-render the current loading state with an updated spinner frame."""
+        if not self._loading_header_text:
+            return
+        header = self.query_one("#diff-header", Label)
+        options = self.query_one("#diff-options", OptionList)
+        header.update(f"{frame} {self._loading_header_text}")
+        options.clear_options()
+        loading_text = Text(f"\n  {frame} {self._loading_option_text}\n", style="dim italic")
         options.add_option(Option(loading_text, disabled=True))
 
     def show_error(self, message: str) -> None:
@@ -73,6 +89,7 @@ class DiffViewer(Widget):
         options.clear_options()
         self._rendered_lines = []
         self.file_diff = None
+        self._loading_header_text = None
 
         header.update("⚠ Diff unavailable")
         err_text = Text(f"\n  ⚠ Failed to load diff: {message}\n", style="bold red")
@@ -80,6 +97,7 @@ class DiffViewer(Widget):
 
     def set_file_diff(self, file_diff: Optional[FileDiff], draft_comments: Optional[List[DraftReviewComment]] = None) -> None:
         self.file_diff = file_diff
+        self._loading_header_text = None
         header = self.query_one("#diff-header", Label)
         options = self.query_one("#diff-options", OptionList)
         options.clear_options()
@@ -153,7 +171,7 @@ class DiffViewer(Widget):
         return matches
 
 
-class PRDiffView(Widget):
+class PRDiffView(Widget, SpinnerMixin):
     """File tree and diff viewer container."""
 
     DEFAULT_CSS = """
@@ -213,13 +231,25 @@ class PRDiffView(Widget):
         self.draft_comments = []
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
-        file_list.add_option(Option("⠋ Loading files...", disabled=True))
+        file_list.add_option(Option(f"{SPINNER_FRAMES[0]} Loading files...", disabled=True))
 
         diff_viewer = self.query_one("#diff-viewer", DiffViewer)
         diff_viewer.show_loading(pr_identifier)
+        self._spinner_start()
+
+    def _on_spinner_frame(self, frame: str) -> None:
+        try:
+            file_list = self.query_one("#file-option-list", OptionList)
+            file_list.clear_options()
+            file_list.add_option(Option(f"{frame} Loading files...", disabled=True))
+            diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+            diff_viewer.render_loading_frame(frame)
+        except Exception:
+            pass
 
     def show_error(self, message: str) -> None:
         """Set the diff view into an error state."""
+        self._spinner_stop()
         self.file_diffs = []
         self.draft_comments = []
         file_list = self.query_one("#file-option-list", OptionList)
@@ -230,6 +260,7 @@ class PRDiffView(Widget):
         diff_viewer.show_error(message)
 
     def load_diff(self, diff_text: str, draft_comments: Optional[List[DraftReviewComment]] = None) -> None:
+        self._spinner_stop()
         self.file_diffs = UnifiedDiffParser.parse(diff_text)
         self.draft_comments = draft_comments or []
 

@@ -4,10 +4,12 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Label, LoadingIndicator
+from textual.widgets import Label
+
+from gitkeeper.ui.spinner import SpinnerMixin
 
 
-class AppHeader(Widget):
+class AppHeader(Widget, SpinnerMixin):
     """Custom application header displaying brand title, active background status, and refresh timestamp."""
 
     DEFAULT_CSS = """
@@ -58,13 +60,20 @@ class AppHeader(Widget):
 
     def _render_status_text(self) -> str:
         if self.is_loading:
-            return f"⠋ {self.status_text}"
+            return f"{self._spinner_frame} {self.status_text}"
         return self.status_text
 
     def _render_timestamp_text(self) -> str:
         if self.last_refreshed_at:
             return f"Last refreshed: {self.last_refreshed_at.strftime('%H:%M:%S')}"
         return "Last refreshed: Never"
+
+    def _on_spinner_frame(self, frame: str) -> None:
+        try:
+            status_label = self.query_one("#header-status", Label)
+            status_label.update(self._render_status_text())
+        except Exception:
+            pass
 
     def watch_status_text(self, new_val: str) -> None:
         try:
@@ -74,6 +83,10 @@ class AppHeader(Widget):
             pass
 
     def watch_is_loading(self, new_val: bool) -> None:
+        if new_val:
+            self._spinner_start()
+        else:
+            self._spinner_stop()
         try:
             status_label = self.query_one("#header-status", Label)
             status_label.update(self._render_status_text())

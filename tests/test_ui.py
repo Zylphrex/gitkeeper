@@ -149,10 +149,19 @@ async def test_pr_diff_view_and_inline_comment():
         # Test diff loading state
         diff_view.show_loading("#101")
         assert len(diff_view.file_diffs) == 0
+        assert diff_view.spinner_is_running is True
 
         # Test diff error state
         diff_view.show_error("Failed to fetch diff from GitHub")
         assert len(diff_view.file_diffs) == 0
+        assert diff_view.spinner_is_running is False
+
+        # Loading resolves and animation stops once the diff is loaded
+        diff_view.show_loading("#101")
+        assert diff_view.spinner_is_running is True
+        diff_view.load_diff(SAMPLE_DIFF, drafts)
+        assert len(diff_view.file_diffs) == 1
+        assert diff_view.spinner_is_running is False
 
 
 
@@ -167,6 +176,12 @@ async def test_app_header_widget():
     assert header.is_loading is True
     assert header.status_text == "Fetching PRs..."
     assert header._render_status_text() == "⠋ Fetching PRs..."
+
+    # Frame animation cycles without waiting on a real timer (off-mount has no timer)
+    header._spinner_tick()
+    assert header._render_status_text() == "⠙ Fetching PRs..."
+    header._spinner_tick()
+    assert header._render_status_text() == "⠹ Fetching PRs..."
 
     ts = datetime(2026, 8, 17, 14, 30, 0)
     header.set_idle("Queue updated", refreshed_at=ts)
