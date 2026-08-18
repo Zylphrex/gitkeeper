@@ -23,7 +23,6 @@ ZONE_RIGHT_SECONDARY = "right-secondary"
 
 WIDGET_TO_ZONE = {
     "pr-option-list": ZONE_PR_LIST,
-    "pr-body-scroll": ZONE_RIGHT_PRIMARY,
     "file-option-list": ZONE_RIGHT_PRIMARY,
     "diff-options": ZONE_RIGHT_SECONDARY,
 }
@@ -75,7 +74,6 @@ class GitkeeperApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh_queue", "Refresh"),
         Binding("tab", "switch_focus", "Switch Pane", show=False),
-        Binding("1", "tab_overview", "Overview"),
         Binding("2", "tab_diff", "Files & Diff"),
         Binding("c", "comment_action", "Comment"),
         Binding("a", "quick_approve", "Approve"),
@@ -123,10 +121,9 @@ class GitkeeperApp(App):
                 id="pr-list-view",
             )
             with TabbedContent(id="right-tabs"):
-                with TabPane("Overview", id="tab-overview"):
-                    yield PROverviewView(id="pr-overview-view")
                 with TabPane("Files & Diff", id="tab-diff"):
                     yield PRDiffView(id="pr-diff-view")
+            yield PROverviewView(id="pr-overview-view")
         yield Input(id="search-input", placeholder="/ — search (Enter to confirm, Esc to cancel)")
         yield Label("Ready", id="status-bar")
         yield Footer()
@@ -293,10 +290,7 @@ class GitkeeperApp(App):
         if zone == ZONE_PR_LIST:
             return "pr-option-list"
         if zone == ZONE_RIGHT_PRIMARY:
-            tabs = self.query_one("#right-tabs", TabbedContent)
-            if tabs.active == "tab-diff":
-                return "file-option-list"
-            return "pr-body-scroll"
+            return "file-option-list"
         if zone == ZONE_RIGHT_SECONDARY:
             return "diff-options"
         return None
@@ -387,16 +381,12 @@ class GitkeeperApp(App):
             self.search_results = list(range(matches))
             self._set_status(f"Search '{query}': {matches} PR(s) match.")
         elif zone == ZONE_RIGHT_PRIMARY:
-            tabs = self.query_one("#right-tabs", TabbedContent)
-            if tabs.active == "tab-diff":
-                diff_view = self.query_one("#pr-diff-view", PRDiffView)
-                matches = diff_view.filter_files(query)
-                if matches == 0:
-                    diff_view.clear_filter()
-                self.search_results = list(range(matches))
-                self._set_status(f"Search '{query}': {matches} file(s) match.")
-            else:
-                self._set_status("Search is not available in the overview tab.")
+            diff_view = self.query_one("#pr-diff-view", PRDiffView)
+            matches = diff_view.filter_files(query)
+            if matches == 0:
+                diff_view.clear_filter()
+            self.search_results = list(range(matches))
+            self._set_status(f"Search '{query}': {matches} file(s) match.")
         elif zone == ZONE_RIGHT_SECONDARY:
             diff_viewer = self.query_one("#diff-viewer")
             matches = diff_viewer.find_matching_lines(query)
@@ -424,12 +414,10 @@ class GitkeeperApp(App):
             except Exception:
                 pass
         elif zone == ZONE_RIGHT_PRIMARY:
-            tabs = self.query_one("#right-tabs", TabbedContent)
-            if tabs.active == "tab-diff":
-                try:
-                    self.query_one("#pr-diff-view", PRDiffView).clear_filter()
-                except Exception:
-                    pass
+            try:
+                self.query_one("#pr-diff-view", PRDiffView).clear_filter()
+            except Exception:
+                pass
 
     def action_next_match(self) -> None:
         if self._guard_vim_action():
@@ -470,10 +458,6 @@ class GitkeeperApp(App):
                 diff_options.highlighted = idx
             except Exception:
                 pass
-
-    def action_tab_overview(self) -> None:
-        tabs = self.query_one("#right-tabs", TabbedContent)
-        tabs.active = "tab-overview"
 
     def action_tab_diff(self) -> None:
         tabs = self.query_one("#right-tabs", TabbedContent)

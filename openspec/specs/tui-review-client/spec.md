@@ -14,8 +14,14 @@ The system SHALL provide a full-screen interactive interface listing actionable 
 
 #### Scenario: Display selected PR overview and rationale
 - **WHEN** a pull request is selected or clicked in the queue list
-- **THEN** the system SHALL display the PR metadata, full description, and detailed scoring rationale breakdown in the right overview panel
+- **THEN** the system SHALL display the PR metadata, full description, and detailed scoring rationale breakdown in a persistent overview section on the far right
+- **AND** the overview section SHALL remain visible while the user inspects the Files & Diff pane for the selected pull request
 - **AND** the system SHALL synchronize the diff viewer with the newly selected pull request
+
+#### Scenario: Overview is not a tab
+- **WHEN** the TUI application loads with the Files & Diff pane active
+- **THEN** the overview section SHALL be visible on the far right without requiring tab switching
+- **AND** the overview section SHALL NOT be selectable as a tab
 
 ### Requirement: In-TUI Diff Viewer
 The system SHALL provide an interactive diff viewer allowing users to inspect file changes and patches for the selected pull request directly within the terminal interface.

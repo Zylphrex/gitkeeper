@@ -13,6 +13,8 @@ class PROverviewView(Widget):
     DEFAULT_CSS = """
     PROverviewView {
         height: 1fr;
+        width: 44;
+        border-left: solid $primary;
         padding: 0 1;
     }
 
