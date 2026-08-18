@@ -44,6 +44,8 @@ class PullRequestData:
     deletions: int
     changed_files_count: int
     ci_status: Optional[str]  # e.g., 'SUCCESS', 'FAILURE', 'PENDING', None
+    base_ref: Optional[str] = None
+    head_ref: Optional[str] = None
     body: str = ""
     requested_reviewers: List[ReviewerRequest] = field(default_factory=list)
     reviews: List[ReviewRecord] = field(default_factory=list)
@@ -169,6 +171,8 @@ class GitHubGraphQLClient:
                     deletions=node.get("deletions", 0),
                     changed_files_count=node.get("changedFiles", len(files)),
                     ci_status=ci_status,
+                    base_ref=node.get("baseRefName") or None,
+                    head_ref=node.get("headRefName") or None,
                     requested_reviewers=requested,
                     reviews=reviews,
                     files=files,

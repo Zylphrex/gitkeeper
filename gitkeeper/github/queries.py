@@ -13,6 +13,8 @@ query GetReviewRequests($query: String!) {
         url
         isDraft
         state
+        baseRefName
+        headRefName
         createdAt
         updatedAt
         additions

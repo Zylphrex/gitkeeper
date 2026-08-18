@@ -1,9 +1,19 @@
 from datetime import datetime
+from io import StringIO
+import re
 import pytest
+from typing import Optional
+from rich.console import Console
+from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
-from gitkeeper.github.client import DraftReviewComment, PullRequestData
+from gitkeeper.github.client import (
+    DraftReviewComment,
+    PullRequestData,
+    ReviewRecord,
+    ReviewerRequest,
+)
 from gitkeeper.scoring.calculator import ScoreBreakdown
 from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
@@ -38,6 +48,53 @@ def _make_mock_scored_pr(number: int = 101, score_val: int = 85) -> ScoredPullRe
         urgency_points=10.0,
         total_score=score_val,
         rationale="Author teammate",
+    )
+    return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
+
+
+LONG_PR_TITLE = (
+    "fix: restore the consistent deduplication of dependency "
+    "bundles during the IPFS ingestion warm-up sweep"
+)
+
+
+def _make_mock_scored_pr_with_metadata() -> ScoredPullRequest:
+    pr = PullRequestData(
+        id="PR_101",
+        number=101,
+        title=LONG_PR_TITLE,
+        body="## Changes\n- Added OAuth2 JWT flow",
+        url="https://github.com/acme/backend/pull/101",
+        repo_name_with_owner="acme/backend",
+        author="alice",
+        is_draft=True,
+        state="OPEN",
+        created_at="2026-08-01T12:00:00Z",
+        updated_at="2026-08-17T09:12:00Z",
+        additions=134,
+        deletions=23,
+        changed_files_count=7,
+        ci_status="SUCCESS",
+        base_ref="main",
+        head_ref="fix/ipfs-dedupe",
+        requested_reviewers=[
+            ReviewerRequest("core-team", is_team=True),
+            ReviewerRequest("bob", is_team=False),
+            ReviewerRequest("sam", is_team=False),
+            ReviewerRequest("lea", is_team=False),
+        ],
+        reviews=[
+            ReviewRecord("bob", "APPROVED", None),
+            ReviewRecord("sam", "APPROVED", None),
+            ReviewRecord("lea", "CHANGES_REQUESTED", None),
+        ],
+    )
+    score = ScoreBreakdown(
+        affinity_points=24.0,
+        assignment_points=30.0,
+        urgency_points=9.0,
+        total_score=64,
+        rationale="You touched 3 of 7 files recently; CI is green.",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
 
@@ -505,3 +562,82 @@ async def test_vim_keys_do_not_fire_in_modal():
         assert "j" in text_area.text
         assert "k" in text_area.text
         assert pr_list.highlighted == 0
+
+
+class _OverviewOnlyApp(App):
+    def __init__(self, scored_pr: ScoredPullRequest, **kwargs):
+        super().__init__(**kwargs)
+        self._scored_pr = scored_pr
+        self.overview: Optional[PROverviewView] = None
+
+    def compose(self) -> ComposeResult:
+        self.overview = PROverviewView(id="pr-overview-view")
+        yield self.overview
+
+    def on_mount(self) -> None:
+        self.overview.update_pr(self._scored_pr)
+
+
+def _render_app_to_text(app: App) -> str:
+    width, height = app.size
+    buf = StringIO()
+    console = Console(
+        width=width,
+        height=height,
+        file=buf,
+        force_terminal=False,
+        color_system=None,
+        legacy_windows=False,
+    )
+    renderable = app.screen._compositor.render_update(
+        full=True, screen_stack=app._background_screens
+    )
+    console.print(renderable)
+    # Strip border/padding decoration cells, then collapse whitespace so words
+    # that wrap across rendered rows also match contiguous substrings.
+    plain = buf.getvalue().translate(str.maketrans("", "", "│█"))
+    return re.sub(r"\s+", " ", plain)
+
+
+@pytest.mark.asyncio
+async def test_pr_overview_metadata_wraps_in_panel():
+    scored = _make_mock_scored_pr_with_metadata()
+    app = _OverviewOnlyApp(scored)
+    async with app.run_test(size=(44, 40)) as pilot:
+        await pilot.pause()
+        rendered = _render_app_to_text(app)
+
+    overview = app.overview
+    assert overview.scored_pr is scored
+
+    # The full title is present across wrapped lines inside the panel (not clipped).
+    assert LONG_PR_TITLE in rendered.replace("\n", " ")
+
+    # All enriched metadata rows are rendered and are readable on-screen.
+    for fragment in [
+        "Repo: acme/backend",
+        "Author: @alice",
+        "base: main",
+        "head: fix/ipfs-dedupe",
+        "CI: SUCCESS",
+        "+134",
+        "-23",
+        "files: 7",
+        "Created: 2026-08-01",
+        "Updated: 1d ago",
+        "Reviewers:",
+        "@bob",
+        "+1 more",
+        "2 ✓ · 1 ✗",
+    ]:
+        assert fragment in rendered, f"missing metadata fragment: {fragment!r}"
+
+
+@pytest.mark.asyncio
+async def test_pr_overview_placeholder_when_no_selection():
+    app = _OverviewOnlyApp(None)
+    async with app.run_test(size=(44, 20)) as pilot:
+        await pilot.pause()
+        rendered = _render_app_to_text(app)
+
+    assert "No pull request selected" in rendered

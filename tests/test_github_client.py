@@ -28,6 +28,8 @@ def test_github_graphql_client_fetch(monkeypatch):
                         "url": "https://github.com/myorg/repo/pull/42",
                         "isDraft": False,
                         "state": "OPEN",
+                        "baseRefName": "main",
+                        "headRefName": "feature/auth-refactor",
                         "createdAt": "2026-08-15T10:00:00Z",
                         "updatedAt": "2026-08-16T12:00:00Z",
                         "additions": 45,
@@ -81,6 +83,8 @@ def test_github_graphql_client_fetch(monkeypatch):
     assert pr.repo_name_with_owner == "myorg/repo"
     assert pr.is_draft is False
     assert pr.ci_status == "SUCCESS"
+    assert pr.base_ref == "main"
+    assert pr.head_ref == "feature/auth-refactor"
     assert len(pr.requested_reviewers) == 2
     assert pr.requested_reviewers[0].login_or_slug == "octocat"
     assert pr.requested_reviewers[0].is_team is False

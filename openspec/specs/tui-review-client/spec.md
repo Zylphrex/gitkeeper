@@ -14,7 +14,11 @@ The system SHALL provide a full-screen interactive interface listing actionable 
 
 #### Scenario: Display selected PR overview and rationale
 - **WHEN** a pull request is selected or clicked in the queue list
-- **THEN** the system SHALL display the PR metadata, full description, and detailed scoring rationale breakdown in the right overview panel
+- **THEN** the system SHALL display the PR metadata, full description, and detailed scoring rationale breakdown in a persistent overview section on the far right
+- **AND** the metadata SHALL be rendered in full: any metadata line that exceeds the overview panel width SHOULD wrap at the panel edge and never be clipped or overflow off-screen
+- **AND** the metadata SHALL include the repository, author, draft state, base and head branch refs, CI status, addition/deletion counts, changed file count, created date, relative time since last update, requested reviewers, and a compact summary of existing reviews
+- **AND** the metadata and scoring rationale boxes SHALL size to their content so the PR body retains the remaining panel height
+- **AND** the overview section SHALL remain visible while the user inspects the Files & Diff pane for the selected pull request
 - **AND** the system SHALL synchronize the diff viewer with the newly selected pull request
 
 #### Scenario: Overview is not a tab
