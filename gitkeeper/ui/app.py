@@ -112,6 +112,7 @@ class GitkeeperApp(App):
         self.current_scored_pr: Optional[ScoredPullRequest] = None
         self.cached_diffs: Dict[str, str] = {}
         self.draft_comments: Dict[str, List[DraftReviewComment]] = {}
+        self._diff_loading_key: Optional[str] = None
         self.search_query = ""
         self.search_results: List[int] = []
         self.search_index = 0
@@ -158,6 +159,8 @@ class GitkeeperApp(App):
         self._select_pr(event.scored_pr)
 
     def _select_pr(self, scored_pr: ScoredPullRequest) -> None:
+        if self.current_scored_pr is scored_pr:
+            return
         self.current_scored_pr = scored_pr
         try:
             overview_view = self.query_one("#pr-overview-view", PROverviewView)
@@ -169,12 +172,16 @@ class GitkeeperApp(App):
         pr_key = f"{scored_pr.pr.repo_name_with_owner}#{scored_pr.pr.number}"
         if pr_key in self.cached_diffs:
             self._display_cached_diff(pr_key)
+        elif self._diff_loading_key == pr_key:
+            return
         else:
+            self._diff_loading_key = pr_key
             try:
                 diff_view = self.query_one("#pr-diff-view", PRDiffView)
                 diff_view.show_loading(f"#{scored_pr.pr.number}")
                 self._fetch_diff_for_pr(scored_pr.pr)
             except Exception:
+                self._diff_loading_key = None
                 pass
 
     def _display_cached_diff(self, pr_key: str) -> None:
@@ -188,6 +195,8 @@ class GitkeeperApp(App):
         diff_text = self.cached_diffs.get(pr_key, "")
         comments = self.draft_comments.get(pr_key, [])
         diff_view.load_diff(diff_text, comments)
+        if self._diff_loading_key == pr_key:
+            self._diff_loading_key = None
 
     def _display_diff_error(self, pr_key: str, message: str) -> None:
         if not self.current_scored_pr:
@@ -198,6 +207,8 @@ class GitkeeperApp(App):
 
         diff_view = self.query_one("#pr-diff-view", PRDiffView)
         diff_view.show_error(message)
+        if self._diff_loading_key == pr_key:
+            self._diff_loading_key = None
 
     @work(exclusive=True, thread=True)
     def _fetch_diff_for_pr(self, pr: PullRequestData) -> None:

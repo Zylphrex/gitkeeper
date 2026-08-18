@@ -1,11 +1,12 @@
 from datetime import datetime
 from io import StringIO
+import asyncio
 import re
 import pytest
 from typing import Optional
 from rich.console import Console
 from textual.app import App, ComposeResult
-from textual.widgets import Input, OptionList
+from textual.widgets import Input, Markdown, OptionList
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
 from gitkeeper.github.client import (
@@ -24,12 +25,20 @@ from gitkeeper.ui.modals import InlineCommentModal, SubmitReviewModal
 from gitkeeper.ui.overview_view import PROverviewView
 
 
-def _make_mock_scored_pr(number: int = 101, tier: TriageTier = TriageTier.T1) -> ScoredPullRequest:
+def _make_mock_scored_pr(
+    number: int = 101, tier: TriageTier = TriageTier.T1
+) -> ScoredPullRequest:
+    return _make_mock_scored_pr_with_body(number, tier, "## Changes\n- Added OAuth2 JWT flow")
+
+
+def _make_mock_scored_pr_with_body(
+    number: int, tier: TriageTier, body: str
+) -> ScoredPullRequest:
     pr = PullRequestData(
         id=f"PR_{number}",
         number=number,
-        title="Add OAuth2 support",
-        body="## Changes\n- Added OAuth2 JWT flow",
+        title=f"PR {number}",
+        body=body,
         url=f"https://github.com/acme/backend/pull/{number}",
         repo_name_with_owner="acme/backend",
         author="alice",
@@ -165,6 +174,9 @@ async def test_pr_list_view_and_selection():
         ])
         assert overview.scored_pr.pr.number == 101
         assert [p.pr.number for p in pr_list.active_prs] == [104, 101, 105]
+
+        # Let the preserved-selection highlight event settle before acting.
+        await pilot.pause()
 
         # Test clicking / selecting an option in list
         option_list = app.query_one("#pr-option-list", OptionList)
@@ -687,6 +699,120 @@ async def test_vim_keys_do_not_fire_in_modal():
         assert "j" in text_area.text
         assert "k" in text_area.text
         assert pr_list.highlighted == 0
+
+
+def test_rapid_navigation_shutdown_no_lost_exceptions(tmp_path):
+    """Rapid queue navigation followed by quit (the real TUI's asyncio.run
+    shutdown path) must not leak unhandled asyncio cancellation errors."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).parent.parent
+    driver = tmp_path / "drive_gitkeeper.py"
+    body_lines = []
+    for section in range(12):
+        body_lines.append(f"### Section {section}")
+        for paragraph in range(6):
+            body_lines.append(
+                f"Paragraph {section}.{paragraph} describing the change "
+                "with sufficiently rich detail to slow parsing."
+            )
+        body_lines.append("- bullet a")
+        body_lines.append("- bullet b")
+    driver_body = "\\n".join(body_lines)
+    driver.write_text(
+        f"""\
+import asyncio
+
+from textual.await_complete import AwaitComplete
+from textual.widgets import Markdown as _Markdown
+
+from gitkeeper.config import Config
+from gitkeeper.github.client import PullRequestData
+from gitkeeper.scoring.calculator import ScoreBreakdown, TriageTier
+from gitkeeper.scoring.pipeline import ScoredPullRequest
+from gitkeeper.ui.app import GitkeeperApp
+
+BODY = "{driver_body}"
+
+
+_orig_update = _Markdown.update
+
+
+def _slow_update(self, markdown):
+    async def slow_update():
+        await asyncio.sleep(1.0)
+        await _orig_update(self, markdown)
+    return AwaitComplete(slow_update())
+
+
+_Markdown.update = _slow_update
+
+
+def mock_pr(number, tier):
+    pr = PullRequestData(
+        id=f"PR_{{number}}", number=number, title=f"PR {{number}}",
+        body=BODY, url=f"https://acme/{{number}}",
+        repo_name_with_owner="acme/backend", author="alice",
+        is_draft=False, state="OPEN",
+        created_at="2026-08-14T10:00:00Z", updated_at="2026-08-15T12:00:00Z",
+        additions=45, deletions=10, changed_files_count=2, ci_status="SUCCESS",
+    )
+    score = ScoreBreakdown(tier=tier, affinity_points=50.0, rationale="teammate")
+    return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
+
+
+async def drive(pilot):
+    await pilot.press(*(["j"] * 4))
+    await pilot.press(*(["k"] * 4))
+    await pilot.pause(0.3)
+    await pilot.press("q")
+
+
+scored_prs = [mock_pr(100 + i, TriageTier(i % 4)) for i in range(10)]
+app = GitkeeperApp(config=Config(), client=None, scored_prs=scored_prs)
+app.run(headless=True, size=(90, 30), auto_pilot=drive)
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(driver)],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    stderr = result.stderr or ""
+    assert "never retrieved" not in stderr, stderr
+    assert "_GatheringFuture" not in stderr, stderr
+
+
+@pytest.mark.asyncio
+async def test_overview_renders_last_previewed_pr_body():
+    def _body(number: int) -> str:
+        return f"## PR {number}\n\nDistinct body marker {number} unique content"
+
+    scored_prs = [
+        _make_mock_scored_pr_with_body(100 + i, TriageTier(i % 4), _body(100 + i))
+        for i in range(6)
+    ]
+    app = GitkeeperApp(config=Config(), client=None, scored_prs=scored_prs)
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option_list.focus()
+        await pilot.pause()
+        for _ in range(len(scored_prs) * 4):
+            await pilot.press("j")
+            await pilot.pause()
+        for _ in range(len(scored_prs) * 4):
+            await pilot.press("k")
+            await pilot.pause()
+        await pilot.pause(0.3)
+        markdown = app.query_one("#pr-body-markdown", Markdown)
+        last_pr = scored_prs[option_list.highlighted]
+        assert f"Distinct body marker {last_pr.pr.number} unique content" in markdown.source
 
 
 class _OverviewOnlyApp(App):

@@ -2,6 +2,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import VerticalGroup, VerticalScroll
 from textual.widget import Widget
@@ -24,6 +25,8 @@ TIER_COLORS = {
     TriageTier.T2: "white",
     TriageTier.T3: "bright_black",
 }
+
+MARKDOWN_DEBOUNCE_MS = 0.12
 
 
 def _ci_color(ci_status: Optional[str]) -> str:
@@ -161,6 +164,10 @@ class PROverviewView(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.scored_pr: Optional[ScoredPullRequest] = None
+        self._rendered_body: Optional[str] = None
+        self._pending_markdown: Optional[str] = None
+        self._debounce_timer = None
+        self._markdown_worker = None
 
     def compose(self) -> ComposeResult:
         with VerticalGroup(id="pr-meta-box"):
@@ -181,14 +188,13 @@ class PROverviewView(Widget):
         meta_label = self.query_one("#pr-meta-info", Label)
         rationale_label = self.query_one("#pr-score-rationale", Label)
         breakdown_label = self.query_one("#pr-score-breakdown", Label)
-        markdown_view = self.query_one("#pr-body-markdown", Markdown)
 
         if not scored_pr:
             title_label.update("No pull request selected")
             meta_label.update("")
             rationale_label.update("")
             breakdown_label.update("")
-            markdown_view.update("")
+            self._schedule_markdown("")
             return
 
         pr = scored_pr.pr
@@ -243,4 +249,30 @@ class PROverviewView(Widget):
         )
 
         body_content = pr.body if pr.body and pr.body.strip() else "_No description provided._"
-        markdown_view.update(body_content)
+        self._schedule_markdown(body_content)
+
+    def _schedule_markdown(self, markdown: str) -> None:
+        if markdown == self._rendered_body:
+            return
+        self._pending_markdown = markdown
+        if self._debounce_timer is not None:
+            self._debounce_timer.reset()
+        else:
+            self._debounce_timer = self.set_timer(
+                MARKDOWN_DEBOUNCE_MS, self._render_pending_markdown
+            )
+
+    def _render_pending_markdown(self) -> None:
+        self._debounce_timer = None
+        markdown = self._pending_markdown
+        if markdown is None or markdown == self._rendered_body:
+            return
+        self._pending_markdown = None
+        self._markdown_worker = self._update_pr_markdown(markdown)
+
+    @work(exclusive=True)
+    async def _update_pr_markdown(self, markdown: str) -> None:
+        """Render PR description markdown in an exclusive worker frame update."""
+        markdown_view = self.query_one("#pr-body-markdown", Markdown)
+        await markdown_view.update(markdown)
+        self._rendered_body = markdown
