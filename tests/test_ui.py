@@ -6,7 +6,7 @@ import pytest
 from typing import Optional
 from rich.console import Console
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Label, Markdown, OptionList
+from textual.widgets import Button, Input, Label, Markdown, OptionList, TextArea
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
 from gitkeeper.github.client import (
@@ -709,6 +709,47 @@ async def test_vim_keys_do_not_fire_in_modal():
         assert "j" in text_area.text
         assert "k" in text_area.text
         assert pr_list.highlighted == 0
+
+
+@pytest.mark.asyncio
+async def test_comment_action_opens_modal_and_stores_draft():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_DIFF)
+        await pilot.pause()  # drain the async file-list highlight re-render
+
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        diff_options.highlighted = 3  # added line "    # RS256" → new line 2
+        await pilot.pause()
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert isinstance(app.screen, InlineCommentModal)
+
+        text_area = app.screen.query_one("#comment-input", TextArea)
+        text_area.focus()
+        text_area.text = "needs a docstring"
+        await pilot.pause()
+
+        app.screen.query_one("#btn-save", Button).press()
+        await pilot.pause()
+
+        pr_key = "acme/backend#101"
+        assert pr_key in app.draft_comments
+        draft = app.draft_comments[pr_key][0]
+        assert isinstance(draft, DraftReviewComment)
+        assert draft.path == "auth/jwt.py"
+        assert draft.line == 2
+        assert draft.body == "needs a docstring"
+
+        assert not isinstance(app.screen, InlineCommentModal)
 
 
 def test_rapid_navigation_shutdown_no_lost_exceptions(tmp_path):

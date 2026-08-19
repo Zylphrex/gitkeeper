@@ -470,7 +470,7 @@ class GitkeeperApp(App):
         diff_view = self.query_one("#pr-diff-view", PRDiffView)
         diff_view.prompt_add_comment()
 
-    def on_pr_diff_view_add_comment_request(self, event: PRDiffView.AddCommentRequest) -> None:
+    def on_prdiff_view_add_comment_request(self, event: PRDiffView.AddCommentRequest) -> None:
         if not self.current_scored_pr:
             return
 
