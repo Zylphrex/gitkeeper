@@ -9,6 +9,7 @@ from textual.widgets import Label, ListView, ListItem, OptionList, Static
 from textual.widgets.option_list import Option
 
 from gitkeeper.diff.parser import DiffLine, FileDiff, UnifiedDiffParser
+from gitkeeper.diff.whitespace import hide_whitespace
 from gitkeeper.github.client import DraftReviewComment, ReviewThread
 from gitkeeper.ui.filestree import TreeHeader, TreeLeaf, build_file_tree
 from gitkeeper.ui.modals import InlineCommentModal
@@ -69,6 +70,7 @@ class DiffViewer(Widget):
         self._rendered_lines: List[DiffLine] = []
         self._loading_header_text: Optional[str] = None
         self._loading_option_text: str = ""
+        self.hide_whitespace: bool = False
 
     def compose(self) -> ComposeResult:
         yield Label("No file selected", id="diff-header")
@@ -132,8 +134,17 @@ class DiffViewer(Widget):
             header.update("No file selected")
             return
 
-        header.update(f"File: {file_diff.display_path}")
+        header_text = f"File: {file_diff.display_path}"
+        if self.hide_whitespace:
+            header_text += " · whitespace hidden"
+        header.update(header_text)
+
         lines = file_diff.all_lines
+        if not lines:
+            if self.hide_whitespace:
+                ws_only = Text("\n  No visible changes — whitespace only\n", style="dim italic")
+                options.add_option(Option(ws_only, disabled=True))
+            return
         self._rendered_lines = lines
 
         if existing_threads:
@@ -262,6 +273,8 @@ class PRDiffView(Widget, SpinnerMixin):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.file_diffs: List[FileDiff] = []
+        self._parsed_diffs: List[FileDiff] = []
+        self.hide_whitespace: bool = False
         self.draft_comments: List[DraftReviewComment] = []
         self.existing_threads: List[ReviewThread] = []
         self._file_indices: List[Optional[int]] = []
@@ -277,6 +290,7 @@ class PRDiffView(Widget, SpinnerMixin):
     def show_loading(self, pr_identifier: str = "") -> None:
         """Set the entire diff view into a loading state."""
         self.file_diffs = []
+        self._parsed_diffs = []
         self.draft_comments = []
         self.existing_threads = []
         self._file_indices = []
@@ -302,6 +316,7 @@ class PRDiffView(Widget, SpinnerMixin):
         """Set the diff view into an error state."""
         self._spinner_stop()
         self.file_diffs = []
+        self._parsed_diffs = []
         self.draft_comments = []
         self.existing_threads = []
         self._file_indices = []
@@ -319,19 +334,33 @@ class PRDiffView(Widget, SpinnerMixin):
         draft_comments: Optional[List[DraftReviewComment]] = None,
     ) -> None:
         self._spinner_stop()
-        self.file_diffs = UnifiedDiffParser.parse(diff_text)
+        self._parsed_diffs = UnifiedDiffParser.parse(diff_text)
         self.existing_threads = existing_threads or []
         self.draft_comments = draft_comments or []
+        self.refresh_hide_whitespace()
+
+    def refresh_hide_whitespace(self) -> None:
+        """Re-derive `file_diffs` from the parsed list honoring the whitespace toggle."""
+        if self.hide_whitespace:
+            self.file_diffs = hide_whitespace(self._parsed_diffs)
+        else:
+            self.file_diffs = list(self._parsed_diffs)
         self._render_file_list()
+
+    def toggle_hide_whitespace(self) -> None:
+        self.hide_whitespace = not self.hide_whitespace
+        self.clear_filter()
+        self.refresh_hide_whitespace()
 
     def _render_file_list(self) -> None:
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
         self._file_indices = []
+        diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+        diff_viewer.hide_whitespace = self.hide_whitespace
 
         if not self.file_diffs:
             file_list.add_option(Option("No changed files", disabled=True))
-            diff_viewer = self.query_one("#diff-viewer", DiffViewer)
             diff_viewer.set_file_diff(None, self.existing_threads, self.draft_comments)
             return
 
@@ -352,7 +381,6 @@ class PRDiffView(Widget, SpinnerMixin):
             None,
         )
         selected_file = self.file_diffs[self._file_indices[first_leaf]] if first_leaf is not None else None
-        diff_viewer = self.query_one("#diff-viewer", DiffViewer)
         diff_viewer.set_file_diff(selected_file, self.existing_threads, self.draft_comments)
         if first_leaf is not None:
             file_list.highlighted = first_leaf
@@ -365,6 +393,7 @@ class PRDiffView(Widget, SpinnerMixin):
                 if file_index is not None and file_index < len(self.file_diffs):
                     selected_file = self.file_diffs[file_index]
                     diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+                    diff_viewer.hide_whitespace = self.hide_whitespace
                     diff_viewer.set_file_diff(selected_file, self.existing_threads, self.draft_comments)
 
     def highlight_file(self, file_index: int) -> None:

@@ -140,6 +140,26 @@ diff --git a/tests/test_util.py b/tests/test_util.py
 +    pass
 """
 
+WS_ONLY_DIFF = """diff --git a/auth/jwt.py b/auth/jwt.py
+--- a/auth/jwt.py
++++ b/auth/jwt.py
+@@ -1,3 +1,3 @@
+ import re
+-def foo()   
++def foo()
+"""
+
+WS_INTERLEAVED_DIFF = """diff --git a/auth/jwt.py b/auth/jwt.py
+--- a/auth/jwt.py
++++ b/auth/jwt.py
+@@ -1,5 +1,5 @@
+ import re
+-def foo()   
++def foo()
+-    old_secret = SECRET
++    new_secret = NEW_SECRET
+"""
+
 
 def test_pr_number_text_hyperlink_with_url():
     console = Console()
@@ -1240,6 +1260,78 @@ async def test_existing_threads_and_pending_comment_render_distinctly():
         prompt = str(diff_options.get_option_at_index(2).prompt)
         assert "alice: Existing note" in prompt
         assert "Pending Comment: my pending note" in prompt
+
+
+@pytest.mark.asyncio
+async def test_hide_whitespace_toggle_key():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(WS_ONLY_DIFF)
+        diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+        header = diff_viewer.query_one("#diff-header", Label)
+        options = app.query_one("#diff-options", OptionList)
+
+        # Before toggling: the whitespace-only hunk is visible as -/+
+        # Before toggling: the whitespace-only hunk is visible as -/+
+        assert diff_view.hide_whitespace is False
+        assert "whitespace hidden" not in str(header.render())
+        assert options.option_count == 4
+
+        await pilot.press("w")
+        await pilot.pause()
+
+        assert diff_view.hide_whitespace is True
+        assert "whitespace hidden" in str(header.render())
+        assert options.option_count == 1  # "no visible changes" note
+        assert diff_view.file_diffs[0].hunks == []
+
+        await pilot.press("w")
+        await pilot.pause()
+
+        assert diff_view.hide_whitespace is False
+        assert "whitespace hidden" not in str(header.render())
+        assert options.option_count == 4
+
+
+@pytest.mark.asyncio
+async def test_hide_whitespace_toggle_keeps_real_changes():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(WS_INTERLEAVED_DIFF)
+        diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+
+        await pilot.press("w")
+        await pilot.pause()
+
+        assert diff_view.hide_whitespace is True
+        lines = diff_viewer.file_diff.hunks[0].lines
+        origins = [line.origin for line in lines]
+        assert origins == [" ", " ", "-", "+"]
+
+
+@pytest.mark.asyncio
+async def test_hide_whitespace_noop_without_loaded_diff():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        await pilot.press("w")
+        await pilot.pause()
+        assert diff_view.hide_whitespace is False
+        assert "No PR diff loaded" in _status_text(app)
 
 
 @pytest.mark.asyncio

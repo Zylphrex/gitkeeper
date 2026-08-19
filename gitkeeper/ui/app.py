@@ -79,6 +79,7 @@ class GitkeeperApp(App):
         Binding("c", "comment_action", "Comment"),
         Binding("s", "submit_review", "Submit Review"),
         Binding("o", "open_browser", "Open in Browser"),
+        Binding("w", "hide_whitespace", "Hide Whitespace"),
         Binding("j", "vim_down", "Down", show=False),
         Binding("down", "vim_down", "Down", show=False),
         Binding("k", "vim_up", "Up", show=False),
@@ -521,6 +522,19 @@ class GitkeeperApp(App):
             InlineCommentModal(event.file_path, event.line_no),
             handle_comment_result,
         )
+
+    def action_hide_whitespace(self) -> None:
+        if self._guard_vim_action():
+            return
+        try:
+            diff_view = self.query_one("#pr-diff-view", PRDiffView)
+        except Exception:
+            return
+        if not diff_view._parsed_diffs:
+            self._set_status("No PR diff loaded.")
+            return
+        diff_view.toggle_hide_whitespace()
+        self._set_status(f"Hide whitespace: {'on' if diff_view.hide_whitespace else 'off'}")
 
     def action_open_browser(self) -> None:
         if self._guard_vim_action():
