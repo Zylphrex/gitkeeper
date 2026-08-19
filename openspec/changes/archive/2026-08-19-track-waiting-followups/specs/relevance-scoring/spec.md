@@ -1,8 +1,4 @@
-## Purpose
-
-Evaluates pull requests against actionability filters, local git affinity scores, assignment types, and urgency heuristics to compute a composite relevance score.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Actionability Gating
 The system SHALL partition reviewed pull requests into action bands — _active_ (the ball is on the user), _waiting on author_ (the user requested changes and the author has not pushed since), or _waiting on others_ — and SHALL exclude pull requests that are not ready or actionable for anyone (drafts, closed pull requests, and failing-CI pull requests when configured), while keeping recently-active previously-reviewed pull requests in the active band as re-review items.
@@ -30,6 +26,8 @@ The system SHALL partition reviewed pull requests into action bands — _active_
 #### Scenario: Hold approved pull requests as waiting on others
 - **WHEN** the user's latest review verdict is APPROVED or DISMISSED and no author push has landed since
 - **THEN** the system SHALL place the pull request in the waiting-on-others band
+
+## ADDED Requirements
 
 ### Requirement: Assign Follow-up Turn State
 The system SHALL classify each pull request into exactly one follow-up turn state — `ME_ACTIVE` (ball on the user), `WAITING_AUTHOR` (ball on the pull request author), or `WAITING_OTHERS` (ball on other reviewers, CI, or merge) — derived from the user's relationship to the pull request, the user's review verdicts, external reviewer verdicts, and the latest author push time, and SHALL NOT discard turn states by a numeric score threshold.
@@ -72,18 +70,3 @@ The system SHALL track how long each `ME_ACTIVE` pull request has been waiting o
 #### Scenario: Staleness counts from the user's outstanding act
 - **WHEN** the user's outstanding action is a requested-changes re-review
 - **THEN** the staleness age SHALL be measured from the author's latest push, not from the pull request creation
-
-### Requirement: Calculate Affinity and Urgency Score
-The system SHALL compute heuristic signal inputs — local git affinity for touched files, assignment type, wait time, and review size — and SHALL NOT aggregate them into a composite 0-100 orderable score. The signals feed triage tier assignment and intra-tier queue ordering, and the composite score SHALL be removed from ranking output.
-
-#### Scenario: Compute affinity signal for direct review on familiar code
-- **WHEN** a user is directly requested on a PR where they authored recent commits on files touched by the PR
-- **THEN** the system SHALL produce a recency-weighted affinity signal reflecting how recently and how broadly the user touched the changed files
-
-#### Scenario: Compute alignment signal for team broadcast on unfamiliar code
-- **WHEN** a PR is assigned via a team alias and the user has no commit history on the touched files
-- **THEN** the system SHALL mark the affinity signal as low and the assignment as team-level, which ranks it below direct requests
-
-#### Scenario: Wait-time urgency signal
-- **WHEN** a pull request has kept an actionable state waiting for longer than a configured window
-- **THEN** the system SHALL treat it as more age-urgent for intra-tier ordering without ever exceeding the pressure of an active author interaction

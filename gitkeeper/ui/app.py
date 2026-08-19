@@ -11,6 +11,7 @@ from textual.widgets import Footer, Input, Label, OptionList
 from gitkeeper.config import Config
 from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient, PullRequestData, ReviewThread
 from gitkeeper.repos import RepoLocator
+from gitkeeper.scoring.calculator import FollowUpState
 from gitkeeper.scoring.pipeline import RelevancePipeline, ScoredPullRequest
 from gitkeeper.ui.diff_view import PRDiffView
 from gitkeeper.ui.header import AppHeader
@@ -150,7 +151,20 @@ class GitkeeperApp(App):
 
         pr_list_view.set_pull_requests(scored_prs, preserve_pr_key=preserve_key)
         status_bar = self.query_one("#status-bar", Label)
-        status_bar.update(f"Loaded {len(scored_prs)} review requests.")
+        active_count = sum(
+            1
+            for p in scored_prs
+            if p.is_actionable and p.score.follow_state == FollowUpState.ME_ACTIVE
+        )
+        waiting_count = sum(
+            1 for p in scored_prs if p.is_actionable and p.score.follow_state != FollowUpState.ME_ACTIVE
+        )
+        if waiting_count:
+            status_bar.update(
+                f"Loaded {active_count} to review · {waiting_count} waiting."
+            )
+        else:
+            status_bar.update(f"Loaded {active_count} review requests.")
         selected = pr_list_view.get_selected_pr()
         if selected:
             self._select_pr(selected)
@@ -609,7 +623,9 @@ class GitkeeperApp(App):
                 except Exception:
                     pass
 
-            prs = self.client.fetch_pending_review_requests(user)
+            prs = self.client.fetch_pending_review_requests(
+                user, include_authored=self.config.followup.include_authored
+            )
 
             self.app.call_from_thread(self._set_status, "Evaluating relevance heuristics & local repos...")
             self.app.call_from_thread(self._set_header_loading, "Evaluating relevance heuristics...")

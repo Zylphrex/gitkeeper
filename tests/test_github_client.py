@@ -404,3 +404,61 @@ def test_get_pull_request_review_threads_parses_payload(monkeypatch):
         ReviewThread(path="src/main.py", line=3, comments=[]),
     ]
     assert all(t.path for t in threads), "threads without a path must be dropped"
+
+
+def test_fetch_pending_review_requests_merges_authored_search(monkeypatch):
+    recorded_variables = []
+    responses = [
+        _search_payload([_pr_node("PR_kwDO100", 100)], has_next_page=False),
+        _search_payload([_pr_node("PR_kwDO100", 100), _pr_node("PR_kwDO200", 200)], has_next_page=False),
+    ]
+    _mock_httpx(monkeypatch, responses, recorded_variables)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat", include_authored=True)
+
+    assert [pr.number for pr in prs] == [100, 200]
+    assert len(recorded_variables) == 2
+    assert "review-requested:octocat" in recorded_variables[0]["query"]
+    assert "author:octocat" in recorded_variables[1]["query"]
+
+
+def test_fetch_authored_duplicates_removed_across_searches(monkeypatch):
+    recorded_variables = []
+    responses = [
+        _search_payload([_pr_node("PR_kwDO300", 300)], has_next_page=False),
+        _search_payload([_pr_node("PR_kwDO300", 300)], has_next_page=False),
+    ]
+    _mock_httpx(monkeypatch, responses, recorded_variables)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat", include_authored=True)
+    assert [pr.number for pr in prs] == [300]
+
+
+def test_fetch_authored_not_requested_without_flag(monkeypatch):
+    recorded_variables = []
+    responses = [_search_payload([_pr_node("PR_kwDO400", 400)], has_next_page=False)]
+    _mock_httpx(monkeypatch, responses, recorded_variables)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat")
+    assert [pr.number for pr in prs] == [400]
+    assert len(recorded_variables) == 1
+    assert "author:" not in recorded_variables[0]["query"]
+
+
+def test_fetch_authored_retries_502_then_succeeds(monkeypatch):
+    responses = [
+        httpx.Response(200, json=_search_payload([_pr_node("PR_kwDO500", 500)], has_next_page=False)),
+        httpx.Response(502),
+        httpx.Response(200, json=_search_payload([_pr_node("PR_kwDO501", 501)], has_next_page=False)),
+    ]
+    calls = _mock_httpx_raw_responses(monkeypatch, responses)
+    monkeypatch.setattr("gitkeeper.github.client.time.sleep", lambda s: None)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat", include_authored=True)
+
+    assert sorted(pr.number for pr in prs) == [500, 501]
+    assert len(calls) == 3

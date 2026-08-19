@@ -164,20 +164,14 @@ class GitHubGraphQLClient:
         data = self._execute_query(VIEWER_QUERY)
         return data.get("viewer", {}).get("login", "")
 
-    def fetch_pending_review_requests(self, username: Optional[str] = None) -> List[PullRequestData]:
-        """
-        Fetch open pull requests where review is requested from the user or their teams.
-        Search query format: `is:open is:pr review-requested:@me` (or `review-requested:USERNAME`)
-        """
-        user_filter = username if username else "@me"
-        search_query = f"is:open is:pr review-requested:{user_filter} archived:false"
-
+    def _search_all_nodes(self, query: str) -> List[Dict[str, Any]]:
+        """Walk every page of *query* through the shared page-size/retry path."""
         seen_ids: set = set()
         all_nodes: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
 
         while True:
-            variables: Dict[str, Any] = {"query": search_query}
+            variables: Dict[str, Any] = {"query": query}
             if cursor:
                 variables["cursor"] = cursor
             data = self._execute_query(REVIEW_REQUESTS_QUERY, variables)
@@ -196,6 +190,36 @@ class GitHubGraphQLClient:
             if not page_info.get("hasNextPage") or len(all_nodes) >= self.MAX_RESULTS:
                 break
             cursor = page_info.get("endCursor")
+
+        return all_nodes
+
+    def fetch_pending_review_requests(
+        self,
+        username: Optional[str] = None,
+        include_authored: bool = False,
+    ) -> List[PullRequestData]:
+        """
+        Fetch open pull requests where review is requested from the user or
+        their teams, plus (when *include_authored* is set) pull requests authored
+        by the user. Search query format: `is:open is:pr review-requested:@me`
+        (or `review-requested:USERNAME`) merged with `author:@me`.
+        """
+        user_filter = username if username else "@me"
+
+        all_nodes: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+
+        def extend_search(term: str) -> None:
+            for node in self._search_all_nodes(term):
+                node_id = node.get("id", "")
+                if node_id in seen_ids:
+                    continue
+                seen_ids.add(node_id)
+                all_nodes.append(node)
+
+        extend_search(f"is:open is:pr review-requested:{user_filter} archived:false")
+        if include_authored:
+            extend_search(f"is:open is:pr author:{user_filter} archived:false")
 
         results: List[PullRequestData] = []
 

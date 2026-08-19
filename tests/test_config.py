@@ -66,3 +66,33 @@ def test_repo_locator_explicit_mapping(tmp_path):
     resolved = locator.resolve("myorg/my-repo")
     assert resolved == repo_dir.resolve()
     assert locator.resolve("myorg/unknown") is None
+
+
+def test_followup_config_defaults():
+    from gitkeeper.config import Config
+
+    cfg = Config()
+    assert cfg.followup.include_authored is True
+    assert cfg.followup.show_waiting_on_author is True
+    assert cfg.followup.show_waiting_on_others is True
+    assert cfg.followup.staleness_warn_after_days == 3
+
+
+def test_load_config_parses_followup_block(monkeypatch, tmp_path):
+    from gitkeeper.config import Config
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        """
+followup:
+  include_authored: false
+  show_waiting_on_author: false
+  staleness_warn_after_days: 7
+"""
+    )
+    cfg = load_config(config_file)
+    assert isinstance(cfg.followup, Config.model_fields["followup"].annotation)
+    assert cfg.followup.include_authored is False
+    assert cfg.followup.show_waiting_on_author is False
+    assert cfg.followup.show_waiting_on_others is True
+    assert cfg.followup.staleness_warn_after_days == 7

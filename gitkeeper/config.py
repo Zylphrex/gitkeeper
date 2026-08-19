@@ -48,6 +48,22 @@ class GitConfig(BaseModel):
     )
 
 
+class FollowUpConfig(BaseModel):
+    include_authored: bool = Field(
+        default=True, description="Fetch open PRs authored by the user"
+    )
+    show_waiting_on_author: bool = Field(
+        default=True, description="Render the waiting-on-author band"
+    )
+    show_waiting_on_others: bool = Field(
+        default=True, description="Render the waiting-on-others band"
+    )
+    staleness_warn_after_days: int = Field(
+        default=3,
+        description="Flag active follow-ups outstanding beyond this many days",
+    )
+
+
 class CLIConfig(BaseModel):
     default_view: str = Field(default="queue", description="Default view mode")
     max_items: int = Field(default=10, description="Max items to display")
@@ -58,6 +74,7 @@ class Config(BaseModel):
     repositories: RepositoriesConfig = Field(default_factory=RepositoriesConfig)
     heuristics: HeuristicsConfig = Field(default_factory=HeuristicsConfig)
     git: GitConfig = Field(default_factory=GitConfig)
+    followup: FollowUpConfig = Field(default_factory=FollowUpConfig)
     cli: CLIConfig = Field(default_factory=CLIConfig)
 
 
