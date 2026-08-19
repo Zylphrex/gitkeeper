@@ -10,8 +10,19 @@ from textual.widgets.option_list import Option
 
 from gitkeeper.diff.parser import DiffLine, FileDiff, UnifiedDiffParser
 from gitkeeper.github.client import DraftReviewComment
+from gitkeeper.ui.filestree import TreeHeader, TreeLeaf, build_file_tree
 from gitkeeper.ui.modals import InlineCommentModal
 from gitkeeper.ui.spinner import SPINNER_FRAMES, SpinnerMixin
+
+
+def _change_badge(file_diff: FileDiff) -> str:
+    if file_diff.is_new:
+        return "[ADD]"
+    if file_diff.is_deleted:
+        return "[DEL]"
+    if file_diff.is_renamed:
+        return "[REN]"
+    return "[MOD]"
 
 
 class DiffViewer(Widget):
@@ -198,6 +209,7 @@ class PRDiffView(Widget, SpinnerMixin):
 
     #file-option-list {
         height: 1fr;
+        overflow-x: hidden;
     }
 
     #diff-viewer-pane {
@@ -216,6 +228,7 @@ class PRDiffView(Widget, SpinnerMixin):
         super().__init__(**kwargs)
         self.file_diffs: List[FileDiff] = []
         self.draft_comments: List[DraftReviewComment] = []
+        self._file_indices: List[Optional[int]] = []
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="diff-container"):
@@ -229,6 +242,7 @@ class PRDiffView(Widget, SpinnerMixin):
         """Set the entire diff view into a loading state."""
         self.file_diffs = []
         self.draft_comments = []
+        self._file_indices = []
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
         file_list.add_option(Option(f"{SPINNER_FRAMES[0]} Loading files...", disabled=True))
@@ -252,6 +266,7 @@ class PRDiffView(Widget, SpinnerMixin):
         self._spinner_stop()
         self.file_diffs = []
         self.draft_comments = []
+        self._file_indices = []
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
         file_list.add_option(Option("⚠ Error loading files", disabled=True))
@@ -263,34 +278,58 @@ class PRDiffView(Widget, SpinnerMixin):
         self._spinner_stop()
         self.file_diffs = UnifiedDiffParser.parse(diff_text)
         self.draft_comments = draft_comments or []
+        self._render_file_list()
 
+    def _render_file_list(self) -> None:
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
+        self._file_indices = []
 
-        for idx, fd in enumerate(self.file_diffs):
-            badge = "[MOD]"
-            if fd.is_new:
-                badge = "[ADD]"
-            elif fd.is_deleted:
-                badge = "[DEL]"
-            elif fd.is_renamed:
-                badge = "[REN]"
-            file_list.add_option(Option(f"{badge} {fd.display_path}", id=f"file_{idx}"))
-
-        if self.file_diffs:
-            file_list.highlighted = 0
-            diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-            diff_viewer.set_file_diff(self.file_diffs[0], self.draft_comments)
-        else:
+        if not self.file_diffs:
+            file_list.add_option(Option("No changed files", disabled=True))
             diff_viewer = self.query_one("#diff-viewer", DiffViewer)
             diff_viewer.set_file_diff(None, self.draft_comments)
+            return
+
+        for row in build_file_tree(self.file_diffs):
+            indent = "  " * row.depth
+            if isinstance(row, TreeHeader):
+                file_list.add_option(Option(f"{indent}{row.label}", disabled=True))
+                self._file_indices.append(None)
+            else:
+                file_diff = self.file_diffs[row.file_index]
+                file_list.add_option(
+                    Option(f"{indent}{_change_badge(file_diff)} {row.label}")
+                )
+                self._file_indices.append(row.file_index)
+
+        first_leaf = next(
+            (i for i, file_index in enumerate(self._file_indices) if file_index is not None),
+            None,
+        )
+        selected_file = self.file_diffs[self._file_indices[first_leaf]] if first_leaf is not None else None
+        diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+        diff_viewer.set_file_diff(selected_file, self.draft_comments)
+        if first_leaf is not None:
+            file_list.highlighted = first_leaf
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "file-option-list":
-            if event.option_index is not None and event.option_index < len(self.file_diffs):
-                selected_file = self.file_diffs[event.option_index]
-                diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-                diff_viewer.set_file_diff(selected_file, self.draft_comments)
+            option_index = event.option_index
+            if option_index is not None and option_index < len(self._file_indices):
+                file_index = self._file_indices[option_index]
+                if file_index is not None and file_index < len(self.file_diffs):
+                    selected_file = self.file_diffs[file_index]
+                    diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+                    diff_viewer.set_file_diff(selected_file, self.draft_comments)
+
+    def highlight_file(self, file_index: int) -> None:
+        """Highlight the list row for *file_index*, skipping directory headers."""
+        for option_index, mapped in enumerate(self._file_indices):
+            if mapped == file_index:
+                file_list = self.query_one("#file-option-list", OptionList)
+                file_list.highlighted = option_index
+                return
 
     def prompt_add_comment(self) -> None:
         diff_viewer = self.query_one("#diff-viewer", DiffViewer)
@@ -304,39 +343,11 @@ class PRDiffView(Widget, SpinnerMixin):
         query_lower = query.lower()
         matching = [f for f in self.file_diffs if query_lower in f.display_path.lower()]
         self.file_diffs = matching
-        file_list = self.query_one("#file-option-list", OptionList)
-        file_list.clear_options()
-        for idx, fd in enumerate(matching):
-            badge = "[MOD]"
-            if fd.is_new:
-                badge = "[ADD]"
-            elif fd.is_deleted:
-                badge = "[DEL]"
-            elif fd.is_renamed:
-                badge = "[REN]"
-            file_list.add_option(Option(f"{badge} {fd.display_path}", id=f"file_{idx}"))
-        if matching:
-            file_list.highlighted = 0
-            diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-            diff_viewer.set_file_diff(matching[0], self.draft_comments)
+        self._render_file_list()
         return len(matching)
 
     def clear_filter(self) -> None:
         if hasattr(self, '_full_file_diffs') and self._full_file_diffs:
             self.file_diffs = self._full_file_diffs[:]
             self._full_file_diffs = []
-            file_list = self.query_one("#file-option-list", OptionList)
-            file_list.clear_options()
-            for idx, fd in enumerate(self.file_diffs):
-                badge = "[MOD]"
-                if fd.is_new:
-                    badge = "[ADD]"
-                elif fd.is_deleted:
-                    badge = "[DEL]"
-                elif fd.is_renamed:
-                    badge = "[REN]"
-                file_list.add_option(Option(f"{badge} {fd.display_path}", id=f"file_{idx}"))
-            if self.file_diffs:
-                file_list.highlighted = 0
-                diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-                diff_viewer.set_file_diff(self.file_diffs[0], self.draft_comments)
+            self._render_file_list()

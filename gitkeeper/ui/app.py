@@ -454,8 +454,8 @@ class GitkeeperApp(App):
                 pass
         elif zone == ZONE_RIGHT_PRIMARY:
             try:
-                file_list = self.query_one("#file-option-list", OptionList)
-                file_list.highlighted = idx
+                diff_view = self.query_one("#pr-diff-view", PRDiffView)
+                diff_view.highlight_file(idx)
             except Exception:
                 pass
         elif zone == ZONE_RIGHT_SECONDARY:

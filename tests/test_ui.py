@@ -249,7 +249,92 @@ async def test_pr_diff_view_and_inline_comment():
 
 
 @pytest.mark.asyncio
-async def test_app_header_widget():
+async def test_file_list_renders_compact_tree():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_MULTI_DIFF)
+        file_list = app.query_one("#file-option-list", OptionList)
+
+        # auth/, src/, tests/: one header + one leaf each → 6 rows total.
+        assert file_list.option_count == 6
+        for idx in (0, 2, 4):
+            assert file_list.get_option_at_index(idx).disabled, f"row {idx} should be a header"
+        for idx in (1, 3, 5):
+            assert not file_list.get_option_at_index(idx).disabled
+
+        # First leaf (auth/jwt.py) is auto-selected.
+        assert file_list.highlighted == 1
+        diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+        assert diff_viewer.file_diff.display_path == "auth/jwt.py"
+
+        # Cursor navigation skips header rows: down from row 1 lands on row 3.
+        file_list.focus()
+        await pilot.press("j")
+        await pilot.pause()
+        assert file_list.highlighted == 3
+        assert diff_viewer.file_diff.display_path == "src/main.py"
+
+        await pilot.press("j")
+        await pilot.pause()
+        assert file_list.highlighted == 5
+        assert diff_viewer.file_diff.display_path == "tests/test_util.py"
+
+
+@pytest.mark.asyncio
+async def test_file_search_navigates_compact_tree():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_MULTI_DIFF)
+        file_list = app.query_one("#file-option-list", OptionList)
+        file_list.focus()
+        await pilot.pause()
+
+        await pilot.press("/")
+        await pilot.pause()
+        search_input = app.query_one("#search-input", Input)
+        assert search_input.has_class("-active")
+
+        # "t" matches auth/jwt.py and tests/test_util.py (not src/main.py).
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert [f.display_path for f in diff_view.file_diffs] == [
+            "auth/jwt.py",
+            "tests/test_util.py",
+        ]
+        # Two headers + two leaves; first match highlighted.
+        assert file_list.highlighted == 1
+        diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+        assert diff_viewer.file_diff.display_path == "auth/jwt.py"
+
+        # n / N move between the two matched files.
+        await pilot.press("n")
+        await pilot.pause()
+        assert file_list.highlighted == 3
+        assert diff_viewer.file_diff.display_path == "tests/test_util.py"
+
+        await pilot.press("N")
+        await pilot.pause()
+        assert file_list.highlighted == 1
+        assert diff_viewer.file_diff.display_path == "auth/jwt.py"
+
+        # Esc clears the filter and restores the full tree.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert len(diff_view.file_diffs) == 3
+        assert file_list.option_count == 6
     header = AppHeader()
     assert header.status_text == "Ready"
     assert header.is_loading is False
