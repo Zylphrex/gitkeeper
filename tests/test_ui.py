@@ -1047,6 +1047,128 @@ async def test_comment_action_opens_modal_and_stores_draft():
         assert not isinstance(app.screen, InlineCommentModal)
 
 
+@pytest.mark.asyncio
+async def test_saving_comment_preserves_diff_position():
+    """Saving an inline comment must not reset the file tree or diff position."""
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_MULTI_DIFF)
+        await pilot.pause()  # drain the async file-list highlight re-render
+
+        file_list = app.query_one("#file-option-list", OptionList)
+        # Select src/main.py: auth/ header(0), leaf(1), src/ header(2), leaf(3)
+        file_list.highlighted = 3
+        await pilot.pause()
+
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        diff_options.highlighted = 3  # "+    new_code()" → new line 6
+        await pilot.pause()
+
+        file_before = file_list.highlighted
+        line_before = diff_options.highlighted
+        scroll_before = diff_options.scroll_offset
+
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, InlineCommentModal)
+
+        text_area = app.screen.query_one("#comment-input", TextArea)
+        text_area.focus()
+        text_area.text = "needs a docstring"
+        await pilot.pause()
+        app.screen.query_one("#btn-save", Button).press()
+        await pilot.pause()
+
+        pr_key = "acme/backend#101"
+        assert pr_key in app.draft_comments
+        draft = app.draft_comments[pr_key][0]
+        assert draft.path == "src/main.py"
+        assert draft.line == 6
+        assert not isinstance(app.screen, InlineCommentModal)
+
+        # Position preserved after save
+        assert file_list.highlighted == file_before
+        assert diff_options.highlighted == line_before
+        assert diff_options.scroll_offset == scroll_before
+        assert app.focused is diff_options
+
+        # Pending comment label is visible on the commented line
+        prompt = diff_options.get_option_at_index(3).prompt
+        assert "needs a docstring" in str(prompt)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_comment_preserves_diff_position():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_MULTI_DIFF)
+        await pilot.pause()
+
+        file_list = app.query_one("#file-option-list", OptionList)
+        file_list.highlighted = 3  # src/main.py
+        await pilot.pause()
+
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        diff_options.highlighted = 3
+        await pilot.pause()
+
+        file_before = file_list.highlighted
+        line_before = diff_options.highlighted
+        scroll_before = diff_options.scroll_offset
+
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, InlineCommentModal)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, InlineCommentModal)
+        assert "acme/backend#101" not in app.draft_comments
+        assert file_list.highlighted == file_before
+        assert diff_options.highlighted == line_before
+        assert diff_options.scroll_offset == scroll_before
+        assert app.focused is diff_options
+
+
+@pytest.mark.asyncio
+async def test_add_pending_comment_updates_only_target_row():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(SAMPLE_DIFF)
+        await pilot.pause()
+
+        diff_options = app.query_one("#diff-options", OptionList)
+        before = [str(diff_options.get_option_at_index(i).prompt) for i in range(diff_options.option_count)]
+
+        diff_view.add_draft_comment("auth/jwt.py", 2, "please expand")
+
+        assert diff_options.option_count == len(before)
+        for i in range(diff_options.option_count):
+            after = str(diff_options.get_option_at_index(i).prompt)
+            if i in (2, 3):  # "-    return False" (old 2) and "+    # RS256" (new 2)
+                assert "please expand" in after
+            else:
+                assert after == before[i]
+
+
 def test_rapid_navigation_shutdown_no_lost_exceptions(tmp_path):
     """Rapid queue navigation followed by quit (the real TUI's asyncio.run
     shutdown path) must not leak unhandled asyncio cancellation errors."""

@@ -25,6 +25,11 @@ def _change_badge(file_diff: FileDiff) -> str:
     return "[MOD]"
 
 
+def _line_target_no(line: DiffLine) -> Optional[int]:
+    """The line number a diff line maps to for comment targeting."""
+    return line.new_line_no if line.new_line_no is not None else line.old_line_no
+
+
 class DiffViewer(Widget):
     """Renders syntax and line-number formatted diff lines for a single file."""
 
@@ -59,6 +64,7 @@ class DiffViewer(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.draft_comments: Dict[str, List[DraftReviewComment]] = {}
+        self.comments_by_line: Dict[int, List[str]] = {}
         self._rendered_lines: List[DiffLine] = []
         self._loading_header_text: Optional[str] = None
         self._loading_option_text: str = ""
@@ -113,6 +119,7 @@ class DiffViewer(Widget):
         options = self.query_one("#diff-options", OptionList)
         options.clear_options()
         self._rendered_lines = []
+        self.comments_by_line = {}
 
         if not file_diff:
             header.update("No file selected")
@@ -122,43 +129,56 @@ class DiffViewer(Widget):
         lines = file_diff.all_lines
         self._rendered_lines = lines
 
-        comments_by_line: Dict[int, List[str]] = {}
         if draft_comments:
             for c in draft_comments:
                 if c.path == file_diff.display_path:
-                    comments_by_line.setdefault(c.line, []).append(c.body)
+                    self.comments_by_line.setdefault(c.line, []).append(c.body)
 
-        for idx, line in enumerate(lines):
-            # Format diff line
-            old_str = f"{line.old_line_no:4d}" if line.old_line_no is not None else "    "
-            new_str = f"{line.new_line_no:4d}" if line.new_line_no is not None else "    "
+        for idx in range(len(lines)):
+            options.add_option(Option(self._render_line(idx), id=f"line_{idx}"))
 
-            if line.origin == "+":
-                style = "bold green"
-                prefix = "+"
-            elif line.origin == "-":
-                style = "bold red"
-                prefix = "-"
-            elif line.origin == "@":
-                style = "bold cyan"
-                prefix = "@"
-                old_str = "----"
-                new_str = "----"
-            else:
-                style = "white"
-                prefix = " "
+    def _render_line(self, idx: int) -> Text:
+        """Render the diff line at *idx* with any pending comments attached."""
+        line = self._rendered_lines[idx]
 
-            rich_text = Text()
-            rich_text.append(f"{old_str} {new_str} │ {prefix} ", style="dim")
-            rich_text.append(line.content, style=style)
+        old_str = f"{line.old_line_no:4d}" if line.old_line_no is not None else "    "
+        new_str = f"{line.new_line_no:4d}" if line.new_line_no is not None else "    "
 
-            # Check if comments exist on this line
-            target_line = line.new_line_no if line.new_line_no is not None else line.old_line_no
-            if target_line and target_line in comments_by_line:
-                for c_body in comments_by_line[target_line]:
-                    rich_text.append(f"\n      💬 Pending Comment: {c_body}", style="bold yellow on #332200")
+        if line.origin == "+":
+            style = "bold green"
+            prefix = "+"
+        elif line.origin == "-":
+            style = "bold red"
+            prefix = "-"
+        elif line.origin == "@":
+            style = "bold cyan"
+            prefix = "@"
+            old_str = "----"
+            new_str = "----"
+        else:
+            style = "white"
+            prefix = " "
 
-            options.add_option(Option(rich_text, id=f"line_{idx}"))
+        rich_text = Text()
+        rich_text.append(f"{old_str} {new_str} │ {prefix} ", style="dim")
+        rich_text.append(line.content, style=style)
+
+        target_line = _line_target_no(line)
+        if target_line and target_line in self.comments_by_line:
+            for c_body in self.comments_by_line[target_line]:
+                rich_text.append(f"\n      💬 Pending Comment: {c_body}", style="bold yellow on #332200")
+
+        return rich_text
+
+    def add_pending_comment(self, line_no: int, body: str) -> None:
+        """Attach a pending comment to every rendered row for the line without rebuilding the list."""
+        if not self.file_diff:
+            return
+        self.comments_by_line.setdefault(line_no, []).append(body)
+        options = self.query_one("#diff-options", OptionList)
+        for idx, line in enumerate(self._rendered_lines):
+            if _line_target_no(line) == line_no:
+                options.replace_option_prompt_at_index(idx, self._render_line(idx))
 
     def get_selected_line_info(self) -> Optional[tuple[str, int]]:
         if not self.file_diff:
@@ -168,7 +188,7 @@ class DiffViewer(Widget):
         if idx is None or idx >= len(self._rendered_lines):
             return None
         line = self._rendered_lines[idx]
-        target_line = line.new_line_no if line.new_line_no is not None else line.old_line_no
+        target_line = _line_target_no(line)
         if target_line is None:
             return None
         return (self.file_diff.display_path, target_line)
@@ -337,6 +357,13 @@ class PRDiffView(Widget, SpinnerMixin):
         if info:
             file_path, line_no = info
             self.post_message(self.AddCommentRequest(file_path, line_no))
+
+    def add_draft_comment(self, path: str, line_no: int, body: str) -> None:
+        """Attach a draft comment, updating the visible line when the file is shown."""
+        self.draft_comments.append(DraftReviewComment(path=path, line=line_no, body=body))
+        diff_viewer = self.query_one("#diff-viewer", DiffViewer)
+        if diff_viewer.file_diff is not None and diff_viewer.file_diff.display_path == path:
+            diff_viewer.add_pending_comment(line_no, body)
 
     def filter_files(self, query: str) -> int:
         self._full_file_diffs = self.file_diffs[:]

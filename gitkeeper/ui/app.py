@@ -486,7 +486,8 @@ class GitkeeperApp(App):
             pr_key = f"{self.current_scored_pr.pr.repo_name_with_owner}#{self.current_scored_pr.pr.number}"
             draft = DraftReviewComment(path=event.file_path, line=event.line_no, body=comment_text)
             self.draft_comments.setdefault(pr_key, []).append(draft)
-            self._display_cached_diff(pr_key)
+            diff_view = self.query_one("#pr-diff-view", PRDiffView)
+            diff_view.add_draft_comment(event.file_path, event.line_no, comment_text)
             self._set_status(f"Added comment on {event.file_path}:{event.line_no}")
 
         self.push_screen(
