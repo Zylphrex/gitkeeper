@@ -2,7 +2,7 @@
 
 REVIEW_REQUESTS_QUERY = """
 query GetReviewRequests($query: String!, $cursor: String) {
-  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
+  search(query: $query, type: ISSUE, first: 25, after: $cursor) {
     issueCount
     pageInfo {
       hasNextPage

@@ -1,10 +1,13 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+import time
 import httpx
 from gitkeeper.github.auth import AuthProvider
 from gitkeeper.github.queries import REVIEW_REQUESTS_QUERY, VIEWER_QUERY
 from gitkeeper.github.mutations import ADD_PULL_REQUEST_REVIEW_MUTATION
+
+RETRY_DELAYS = (1.0, 2.0)
 
 
 @dataclass
@@ -61,7 +64,7 @@ class DraftReviewComment:
 
 
 class GitHubGraphQLClient:
-    PAGE_SIZE = 100
+    PAGE_SIZE = 25
     MAX_RESULTS = 2000
 
     def __init__(
@@ -74,23 +77,70 @@ class GitHubGraphQLClient:
         self.endpoint = endpoint
         self.rest_endpoint = rest_endpoint
 
-    def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        headers = self.auth_provider.get_auth_headers()
-        with httpx.Client(timeout=15.0) as client:
-            response = client.post(
-                self.endpoint,
-                headers=headers,
-                json={"query": query, "variables": variables or {}},
-            )
-            if response.status_code == 401:
-                raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
-            response.raise_for_status()
-            data = response.json()
+    def _execute_query(
+        self,
+        query: str,
+        variables: Optional[Dict[str, Any]] = None,
+        retries: bool = True,
+    ) -> Dict[str, Any]:
+        response = self._post_graphql(query, variables, retries=retries)
+        if response.status_code == 401:
+            raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
+        response.raise_for_status()
+        data = response.json()
 
-            if "errors" in data and data["errors"]:
-                messages = [err.get("message", "Unknown GraphQL error") for err in data["errors"]]
-                raise RuntimeError(f"GitHub GraphQL error: {'; '.join(messages)}")
-            return data.get("data", {})
+        if "errors" in data and data["errors"]:
+            messages = [err.get("message", "Unknown GraphQL error") for err in data["errors"]]
+            raise RuntimeError(f"GitHub GraphQL error: {'; '.join(messages)}")
+        return data.get("data", {})
+
+    def _request_with_retry(
+        self,
+        send: Callable[[], httpx.Response],
+        retries: bool = True,
+    ) -> httpx.Response:
+        """Execute *send* once, retrying HTTP 5xx responses with backoff.
+
+        Retries happen *only* on 5xx responses; 4xx errors and GraphQL-level
+        errors in a 200 body are returned to the caller untouched.
+        """
+        max_retries = len(RETRY_DELAYS) if retries else 0
+        for attempt in range(max_retries + 1):
+            response = send()
+            if response.status_code >= 500 and attempt < max_retries:
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            return response
+        raise AssertionError("unreachable")
+
+    def _post_graphql(
+        self,
+        query: str,
+        variables: Optional[Dict[str, Any]] = None,
+        retries: bool = True,
+    ) -> httpx.Response:
+        def send() -> httpx.Response:
+            headers = self.auth_provider.get_auth_headers()
+            with httpx.Client(timeout=15.0) as client:
+                return client.post(
+                    self.endpoint,
+                    headers=headers,
+                    json={"query": query, "variables": variables or {}},
+                )
+
+        return self._request_with_retry(send, retries=retries)
+
+    def _get(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        retries: bool = True,
+    ) -> httpx.Response:
+        def send() -> httpx.Response:
+            with httpx.Client(timeout=30.0) as client:
+                return client.get(url, headers=headers)
+
+        return self._request_with_retry(send, retries=retries)
 
     def get_viewer_login(self) -> str:
         """Fetch current authenticated user's GitHub username."""
@@ -218,12 +268,11 @@ class GitHubGraphQLClient:
         headers["Accept"] = "application/vnd.github.v3.diff"
         url = f"{self.rest_endpoint}/repos/{repo_name_with_owner}/pulls/{pull_number}"
 
-        with httpx.Client(timeout=30.0) as client:
-            response = client.get(url, headers=headers)
-            if response.status_code == 401:
-                raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
-            response.raise_for_status()
-            return response.text
+        response = self._get(url, headers, retries=True)
+        if response.status_code == 401:
+            raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
+        response.raise_for_status()
+        return response.text
 
     def add_pull_request_review(
         self,
@@ -253,4 +302,5 @@ class GitHubGraphQLClient:
         return self._execute_query(
             ADD_PULL_REQUEST_REVIEW_MUTATION,
             {"input": input_data},
+            retries=False,
         )

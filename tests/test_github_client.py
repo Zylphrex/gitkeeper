@@ -152,6 +152,50 @@ def test_fetch_pending_review_requests_deduplicates_across_pages(monkeypatch):
     assert len(prs) == 3
 
 
+def test_review_requests_query_page_size_matches_client_constant():
+    from gitkeeper.github.queries import REVIEW_REQUESTS_QUERY
+
+    assert f"first: {GitHubGraphQLClient.PAGE_SIZE}" in REVIEW_REQUESTS_QUERY
+    assert "first: 25" in REVIEW_REQUESTS_QUERY
+
+
+def test_fetch_pending_review_requests_retries_502_then_succeeds(monkeypatch):
+    responses = [
+        httpx.Response(502),
+        httpx.Response(502),
+        httpx.Response(200, json=_search_payload([_pr_node("PR_kwDO123", 42)], has_next_page=False)),
+    ]
+    calls = _mock_httpx_raw_responses(monkeypatch, responses)
+    monkeypatch.setattr("gitkeeper.github.client.time.sleep", lambda s: None)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat")
+
+    assert [pr.number for pr in prs] == [42]
+    assert len(calls) == 3
+
+
+def test_fetch_pending_review_requests_raises_when_502_persists(monkeypatch):
+    responses = [httpx.Response(502), httpx.Response(502), httpx.Response(502)]
+    _mock_httpx_raw_responses(monkeypatch, responses)
+    monkeypatch.setattr("gitkeeper.github.client.time.sleep", lambda s: None)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    with pytest.raises(httpx.HTTPStatusError):
+        client.fetch_pending_review_requests("octocat")
+
+
+def test_fetch_pending_review_requests_does_not_retry_401(monkeypatch):
+    responses = [httpx.Response(401, json={"message": "Bad credentials"})]
+    calls = _mock_httpx_raw_responses(monkeypatch, responses)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    with pytest.raises(PermissionError):
+        client.fetch_pending_review_requests("octocat")
+
+    assert len(calls) == 1
+
+
 def _search_payload(
     nodes: list,
     has_next_page: bool = False,
@@ -212,6 +256,23 @@ def _mock_httpx(monkeypatch, responses, recorded_variables=None):
 
     monkeypatch.setattr(httpx, "Client", factory)
     return shared_variables
+
+
+def _mock_httpx_raw_responses(monkeypatch, responses):
+    real_client = httpx.Client
+    shared_responses = responses
+    calls = []
+
+    class RawTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return shared_responses.pop(0)
+
+    def factory(**kwargs):
+        return real_client(transport=RawTransport())
+
+    monkeypatch.setattr(httpx, "Client", factory)
+    return calls
 
 
 def test_get_pull_request_diff(monkeypatch):
