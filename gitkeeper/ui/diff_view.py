@@ -9,7 +9,7 @@ from textual.widgets import Label, ListView, ListItem, OptionList, Static
 from textual.widgets.option_list import Option
 
 from gitkeeper.diff.parser import DiffLine, FileDiff, UnifiedDiffParser
-from gitkeeper.github.client import DraftReviewComment
+from gitkeeper.github.client import DraftReviewComment, ReviewThread
 from gitkeeper.ui.filestree import TreeHeader, TreeLeaf, build_file_tree
 from gitkeeper.ui.modals import InlineCommentModal
 from gitkeeper.ui.spinner import SPINNER_FRAMES, SpinnerMixin
@@ -65,6 +65,7 @@ class DiffViewer(Widget):
         super().__init__(**kwargs)
         self.draft_comments: Dict[str, List[DraftReviewComment]] = {}
         self.comments_by_line: Dict[int, List[str]] = {}
+        self.existing_by_line: Dict[int, List[ThreadComment]] = {}
         self._rendered_lines: List[DiffLine] = []
         self._loading_header_text: Optional[str] = None
         self._loading_option_text: str = ""
@@ -112,7 +113,12 @@ class DiffViewer(Widget):
         err_text = Text(f"\n  ⚠ Failed to load diff: {message}\n", style="bold red")
         options.add_option(Option(err_text, disabled=True))
 
-    def set_file_diff(self, file_diff: Optional[FileDiff], draft_comments: Optional[List[DraftReviewComment]] = None) -> None:
+    def set_file_diff(
+        self,
+        file_diff: Optional[FileDiff],
+        existing_threads: Optional[List[ReviewThread]] = None,
+        draft_comments: Optional[List[DraftReviewComment]] = None,
+    ) -> None:
         self.file_diff = file_diff
         self._loading_header_text = None
         header = self.query_one("#diff-header", Label)
@@ -120,6 +126,7 @@ class DiffViewer(Widget):
         options.clear_options()
         self._rendered_lines = []
         self.comments_by_line = {}
+        self.existing_by_line: Dict[int, List[ThreadComment]] = {}
 
         if not file_diff:
             header.update("No file selected")
@@ -128,6 +135,11 @@ class DiffViewer(Widget):
         header.update(f"File: {file_diff.display_path}")
         lines = file_diff.all_lines
         self._rendered_lines = lines
+
+        if existing_threads:
+            for thread in existing_threads:
+                if thread.path == file_diff.display_path and thread.line is not None:
+                    self.existing_by_line.setdefault(thread.line, []).extend(thread.comments)
 
         if draft_comments:
             for c in draft_comments:
@@ -138,7 +150,7 @@ class DiffViewer(Widget):
             options.add_option(Option(self._render_line(idx), id=f"line_{idx}"))
 
     def _render_line(self, idx: int) -> Text:
-        """Render the diff line at *idx* with any pending comments attached."""
+        """Render the diff line at *idx* with any existing threads and pending comments attached."""
         line = self._rendered_lines[idx]
 
         old_str = f"{line.old_line_no:4d}" if line.old_line_no is not None else "    "
@@ -164,6 +176,9 @@ class DiffViewer(Widget):
         rich_text.append(line.content, style=style)
 
         target_line = _line_target_no(line)
+        if target_line and target_line in self.existing_by_line:
+            for tc in self.existing_by_line[target_line]:
+                rich_text.append(f"\n      💬 {tc.author}: {tc.body}", style="bold blue on #002244")
         if target_line and target_line in self.comments_by_line:
             for c_body in self.comments_by_line[target_line]:
                 rich_text.append(f"\n      💬 Pending Comment: {c_body}", style="bold yellow on #332200")
@@ -248,6 +263,7 @@ class PRDiffView(Widget, SpinnerMixin):
         super().__init__(**kwargs)
         self.file_diffs: List[FileDiff] = []
         self.draft_comments: List[DraftReviewComment] = []
+        self.existing_threads: List[ReviewThread] = []
         self._file_indices: List[Optional[int]] = []
 
     def compose(self) -> ComposeResult:
@@ -262,6 +278,7 @@ class PRDiffView(Widget, SpinnerMixin):
         """Set the entire diff view into a loading state."""
         self.file_diffs = []
         self.draft_comments = []
+        self.existing_threads = []
         self._file_indices = []
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
@@ -286,6 +303,7 @@ class PRDiffView(Widget, SpinnerMixin):
         self._spinner_stop()
         self.file_diffs = []
         self.draft_comments = []
+        self.existing_threads = []
         self._file_indices = []
         file_list = self.query_one("#file-option-list", OptionList)
         file_list.clear_options()
@@ -294,9 +312,15 @@ class PRDiffView(Widget, SpinnerMixin):
         diff_viewer = self.query_one("#diff-viewer", DiffViewer)
         diff_viewer.show_error(message)
 
-    def load_diff(self, diff_text: str, draft_comments: Optional[List[DraftReviewComment]] = None) -> None:
+    def load_diff(
+        self,
+        diff_text: str,
+        existing_threads: Optional[List[ReviewThread]] = None,
+        draft_comments: Optional[List[DraftReviewComment]] = None,
+    ) -> None:
         self._spinner_stop()
         self.file_diffs = UnifiedDiffParser.parse(diff_text)
+        self.existing_threads = existing_threads or []
         self.draft_comments = draft_comments or []
         self._render_file_list()
 
@@ -308,7 +332,7 @@ class PRDiffView(Widget, SpinnerMixin):
         if not self.file_diffs:
             file_list.add_option(Option("No changed files", disabled=True))
             diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-            diff_viewer.set_file_diff(None, self.draft_comments)
+            diff_viewer.set_file_diff(None, self.existing_threads, self.draft_comments)
             return
 
         for row in build_file_tree(self.file_diffs):
@@ -329,7 +353,7 @@ class PRDiffView(Widget, SpinnerMixin):
         )
         selected_file = self.file_diffs[self._file_indices[first_leaf]] if first_leaf is not None else None
         diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-        diff_viewer.set_file_diff(selected_file, self.draft_comments)
+        diff_viewer.set_file_diff(selected_file, self.existing_threads, self.draft_comments)
         if first_leaf is not None:
             file_list.highlighted = first_leaf
 
@@ -341,7 +365,7 @@ class PRDiffView(Widget, SpinnerMixin):
                 if file_index is not None and file_index < len(self.file_diffs):
                     selected_file = self.file_diffs[file_index]
                     diff_viewer = self.query_one("#diff-viewer", DiffViewer)
-                    diff_viewer.set_file_diff(selected_file, self.draft_comments)
+                    diff_viewer.set_file_diff(selected_file, self.existing_threads, self.draft_comments)
 
     def highlight_file(self, file_index: int) -> None:
         """Highlight the list row for *file_index*, skipping directory headers."""

@@ -4,7 +4,11 @@ from typing import Any, Callable, Dict, List, Optional
 import time
 import httpx
 from gitkeeper.github.auth import AuthProvider
-from gitkeeper.github.queries import REVIEW_REQUESTS_QUERY, VIEWER_QUERY
+from gitkeeper.github.queries import (
+    PULL_REQUEST_THREADS_QUERY,
+    REVIEW_REQUESTS_QUERY,
+    VIEWER_QUERY,
+)
 from gitkeeper.github.mutations import ADD_PULL_REQUEST_REVIEW_MUTATION
 
 RETRY_DELAYS = (1.0, 2.0)
@@ -61,6 +65,19 @@ class DraftReviewComment:
     path: str
     line: int
     body: str
+
+
+@dataclass
+class ThreadComment:
+    author: str
+    body: str
+
+
+@dataclass
+class ReviewThread:
+    path: str
+    line: Optional[int]
+    comments: List[ThreadComment]
 
 
 class GitHubGraphQLClient:
@@ -273,6 +290,32 @@ class GitHubGraphQLClient:
             raise PermissionError("Authentication failed: GitHub token is invalid or expired.")
         response.raise_for_status()
         return response.text
+
+    def get_pull_request_review_threads(
+        self, repo_name_with_owner: str, pull_number: int
+    ) -> List[ReviewThread]:
+        """Fetch inline review threads for a pull request, keyed by path and line."""
+        owner, _, name = repo_name_with_owner.partition("/")
+        data = self._execute_query(
+            PULL_REQUEST_THREADS_QUERY,
+            {"owner": owner, "name": name, "number": pull_number},
+        )
+
+        pull_request = data.get("repository", {}).get("pullRequest") or {}
+        threads: List[ReviewThread] = []
+        for node in pull_request.get("reviewThreads", {}).get("nodes", []):
+            path = node.get("path")
+            if not path:
+                continue
+            comments = [
+                ThreadComment(
+                    author=(c.get("author") or {}).get("login", ""),
+                    body=c.get("body", ""),
+                )
+                for c in node.get("comments", {}).get("nodes", [])
+            ]
+            threads.append(ReviewThread(path=path, line=node.get("line"), comments=comments))
+        return threads
 
     def add_pull_request_review(
         self,

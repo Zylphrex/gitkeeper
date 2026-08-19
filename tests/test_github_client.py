@@ -3,7 +3,12 @@ import json
 import httpx
 import pytest
 from gitkeeper.github.auth import PersonalAccessTokenProvider
-from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient
+from gitkeeper.github.client import (
+    DraftReviewComment,
+    GitHubGraphQLClient,
+    ReviewThread,
+    ThreadComment,
+)
 
 
 def test_personal_access_token_provider():
@@ -337,3 +342,65 @@ def test_add_pull_request_review_mutation(monkeypatch):
     assert input_vars["threads"][0]["path"] == "src/auth.py"
     assert input_vars["threads"][0]["line"] == 15
     assert input_vars["threads"][0]["body"] == "Needs docstring"
+
+
+def test_get_pull_request_review_threads_parses_payload(monkeypatch):
+    recorded_variables = []
+    payload = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "nodes": [
+                            {
+                                "path": "src/auth.py",
+                                "line": 15,
+                                "comments": {
+                                    "nodes": [
+                                        {"author": {"login": "alice"}, "body": "Add docstring"},
+                                        {"author": {"login": "bob"}, "body": "Agreed, needs one"},
+                                    ]
+                                },
+                            },
+                            {
+                                "path": "src/main.py",
+                                "line": 3,
+                                "comments": {"nodes": []},
+                            },
+                            {
+                                "path": None,
+                                "line": 2,
+                                "comments": {"nodes": []},
+                            },
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    class MockTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content.decode("utf-8"))
+            recorded_variables.append(body.get("variables", {}))
+            return httpx.Response(200, json=payload)
+
+    mock_client = httpx.Client(transport=MockTransport())
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: mock_client)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    threads = client.get_pull_request_review_threads("myorg/repo", 42)
+
+    assert recorded_variables == [{"owner": "myorg", "name": "repo", "number": 42}]
+    assert threads == [
+        ReviewThread(
+            path="src/auth.py",
+            line=15,
+            comments=[
+                ThreadComment(author="alice", body="Add docstring"),
+                ThreadComment(author="bob", body="Agreed, needs one"),
+            ],
+        ),
+        ReviewThread(path="src/main.py", line=3, comments=[]),
+    ]
+    assert all(t.path for t in threads), "threads without a path must be dropped"

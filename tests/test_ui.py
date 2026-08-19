@@ -14,7 +14,9 @@ from gitkeeper.github.client import (
     DraftReviewComment,
     PullRequestData,
     ReviewRecord,
+    ReviewThread,
     ReviewerRequest,
+    ThreadComment,
 )
 from gitkeeper.scoring.calculator import ScoreBreakdown, TriageTier
 from gitkeeper.scoring.pipeline import ScoredPullRequest
@@ -432,7 +434,7 @@ async def test_pr_diff_view_and_inline_comment():
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         drafts = [DraftReviewComment(path="auth/jwt.py", line=3, body="Test comment")]
-        diff_view.load_diff(SAMPLE_DIFF, drafts)
+        diff_view.load_diff(SAMPLE_DIFF, draft_comments=drafts)
 
         assert len(diff_view.file_diffs) == 1
         diff_viewer = app.query_one("#diff-viewer", DiffViewer)
@@ -452,7 +454,7 @@ async def test_pr_diff_view_and_inline_comment():
         # Loading resolves and animation stops once the diff is loaded
         diff_view.show_loading("#101")
         assert diff_view.spinner_is_running is True
-        diff_view.load_diff(SAMPLE_DIFF, drafts)
+        diff_view.load_diff(SAMPLE_DIFF, draft_comments=drafts)
         assert len(diff_view.file_diffs) == 1
         assert diff_view.spinner_is_running is False
 
@@ -1167,6 +1169,116 @@ async def test_add_pending_comment_updates_only_target_row():
                 assert "please expand" in after
             else:
                 assert after == before[i]
+
+
+@pytest.mark.asyncio
+async def test_set_file_diff_renders_existing_threads_on_matching_lines():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        threads = [
+            ReviewThread(
+                path="auth/jwt.py",
+                line=2,
+                comments=[
+                    ThreadComment(author="alice", body="Add docs"),
+                    ThreadComment(author="bob", body="Agreed"),
+                ],
+            ),
+            # line 999 is not in the rendered diff and must be skipped
+            ReviewThread(path="auth/jwt.py", line=999, comments=[ThreadComment(author="carol", body="Orphan")]),
+            # a line-less thread (left-side/deleted thread) must be skipped
+            ReviewThread(path="auth/jwt.py", line=None, comments=[ThreadComment(author="dave", body="Side")]),
+            # a thread for another file must not leak here
+            ReviewThread(path="other.py", line=2, comments=[ThreadComment(author="erin", body="Other file")]),
+        ]
+        diff_view.load_diff(SAMPLE_DIFF, existing_threads=threads)
+        await pilot.pause()
+
+        diff_options = app.query_one("#diff-options", OptionList)
+        # SAMPLE_DIFF rows: 0=@@ hunk header 1=context(old1,new1) 2=delete(old2)
+        # 3=add(new2) 4=add(new3); line 2 maps to rows 2 and 3.
+        prompts = [str(diff_options.get_option_at_index(i).prompt) for i in range(diff_options.option_count)]
+        assert len(prompts) == 5
+        for i in (2, 3):
+            assert "alice: Add docs" in prompts[i]
+            assert "bob: Agreed" in prompts[i]
+        for i in (0, 1, 4):
+            assert "alice" not in prompts[i]
+            assert "carol" not in prompts[i]
+            assert "dave" not in prompts[i]
+            assert "erin" not in prompts[i]
+
+
+@pytest.mark.asyncio
+async def test_existing_threads_and_pending_comment_render_distinctly():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        diff_view.load_diff(
+            SAMPLE_DIFF,
+            existing_threads=[
+                ReviewThread(
+                    path="auth/jwt.py",
+                    line=2,
+                    comments=[ThreadComment(author="alice", body="Existing note")],
+                )
+            ],
+        )
+        diff_view.add_draft_comment("auth/jwt.py", 2, "my pending note")
+        await pilot.pause()
+
+        diff_options = app.query_one("#diff-options", OptionList)
+        prompt = str(diff_options.get_option_at_index(2).prompt)
+        assert "alice: Existing note" in prompt
+        assert "Pending Comment: my pending note" in prompt
+
+
+@pytest.mark.asyncio
+async def test_thread_fetch_failure_still_displays_diff():
+    """A failing review-threads fetch must not prevent the diff from displaying."""
+
+    class FakeClient:
+        def __init__(self):
+            self.thread_count = 0
+
+        def get_pull_request_diff(self, repo_name_with_owner, pull_number):
+            return SAMPLE_DIFF
+
+        def get_pull_request_review_threads(self, repo_name_with_owner, pull_number):
+            self.thread_count += 1
+            raise RuntimeError("reviews unavailable")
+
+    app = GitkeeperApp(
+        config=Config(),
+        client=FakeClient(),
+        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pr = app.current_scored_pr.pr
+        worker = app._fetch_diff_for_pr(pr)
+        await worker.wait()
+        await pilot.pause()
+
+        diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+        assert diff_viewer.file_diff is not None
+        assert diff_viewer.file_diff.display_path == "auth/jwt.py"
+        options = app.query_one("#diff-options", OptionList)
+        assert options.option_count > 0
+
+        pr_key = "acme/backend#101"
+        assert app.cached_diffs.get(pr_key) == SAMPLE_DIFF
+        assert app.cached_thread.get(pr_key) == []
+        assert "Error fetching review threads" in _status_text(app)
 
 
 def test_rapid_navigation_shutdown_no_lost_exceptions(tmp_path):

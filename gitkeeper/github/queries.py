@@ -87,3 +87,26 @@ query GetViewer {
   }
 }
 """
+
+PULL_REQUEST_THREADS_QUERY = """
+query GetReviewThreads($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          path
+          line
+          comments(first: 20) {
+            nodes {
+              author {
+                login
+              }
+              body
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""

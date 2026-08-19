@@ -9,7 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Label, OptionList
 
 from gitkeeper.config import Config
-from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient, PullRequestData
+from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient, PullRequestData, ReviewThread
 from gitkeeper.repos import RepoLocator
 from gitkeeper.scoring.pipeline import RelevancePipeline, ScoredPullRequest
 from gitkeeper.ui.diff_view import PRDiffView
@@ -111,6 +111,7 @@ class GitkeeperApp(App):
         self.initial_scored_prs = scored_prs
         self.current_scored_pr: Optional[ScoredPullRequest] = None
         self.cached_diffs: Dict[str, str] = {}
+        self.cached_thread: Dict[str, List[ReviewThread]] = {}
         self.draft_comments: Dict[str, List[DraftReviewComment]] = {}
         self._diff_loading_key: Optional[str] = None
         self.search_query = ""
@@ -199,7 +200,8 @@ class GitkeeperApp(App):
         diff_view = self.query_one("#pr-diff-view", PRDiffView)
         diff_text = self.cached_diffs.get(pr_key, "")
         comments = self.draft_comments.get(pr_key, [])
-        diff_view.load_diff(diff_text, comments)
+        threads = self.cached_thread.get(pr_key, [])
+        diff_view.load_diff(diff_text, threads, comments)
         if self._diff_loading_key == pr_key:
             self._diff_loading_key = None
 
@@ -224,10 +226,21 @@ class GitkeeperApp(App):
         try:
             diff_text = self.client.get_pull_request_diff(pr.repo_name_with_owner, pr.number)
             self.cached_diffs[pr_key] = diff_text
-            self.app.call_from_thread(self._display_cached_diff, pr_key)
         except Exception as exc:
             self.app.call_from_thread(self._display_diff_error, pr_key, str(exc))
             self.app.call_from_thread(self._set_status, f"Error fetching diff: {exc}")
+            return
+
+        try:
+            threads = self.client.get_pull_request_review_threads(
+                pr.repo_name_with_owner, pr.number
+            )
+            self.cached_thread[pr_key] = threads
+        except Exception as exc:
+            self.cached_thread[pr_key] = []
+            self.app.call_from_thread(self._set_status, f"Error fetching review threads: {exc}")
+
+        self.app.call_from_thread(self._display_cached_diff, pr_key)
 
     def _set_status(self, text: str) -> None:
         status_bar = self.query_one("#status-bar", Label)
