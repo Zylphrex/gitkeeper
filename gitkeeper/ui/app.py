@@ -75,7 +75,6 @@ class GitkeeperApp(App):
         Binding("r", "refresh_queue", "Refresh"),
         Binding("tab", "switch_focus", "Switch Pane", show=False),
         Binding("c", "comment_action", "Comment"),
-        Binding("a", "quick_approve", "Approve"),
         Binding("s", "submit_review", "Submit Review"),
         Binding("o", "open_browser", "Open in Browser"),
         Binding("j", "vim_down", "Down", show=False),
@@ -487,17 +486,6 @@ class GitkeeperApp(App):
             InlineCommentModal(event.file_path, event.line_no),
             handle_comment_result,
         )
-
-    def action_quick_approve(self) -> None:
-        if not self.current_scored_pr:
-            self._set_status("No PR selected to approve.")
-            return
-
-        pr = self.current_scored_pr.pr
-        pr_key = f"{pr.repo_name_with_owner}#{pr.number}"
-        pending_comments = self.draft_comments.get(pr_key, [])
-
-        self._submit_review_worker(pr.id, "APPROVE", "LGTM!", pending_comments, pr_key)
 
     def action_open_browser(self) -> None:
         if self._guard_vim_action():
