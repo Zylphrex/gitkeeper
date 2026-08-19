@@ -4,6 +4,7 @@ import asyncio
 import re
 import pytest
 from typing import Optional
+from rich.cells import cell_len
 from rich.console import Console
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, Label, Markdown, OptionList, TextArea
@@ -20,7 +21,7 @@ from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
 from gitkeeper.ui.diff_view import DiffViewer, PRDiffView
 from gitkeeper.ui.header import AppHeader
-from gitkeeper.ui.list_view import PRListView, _pr_number_text
+from gitkeeper.ui.list_view import PRListView, ROW_WIDTH, _pr_number_text, _truncate
 from gitkeeper.ui.modals import InlineCommentModal, SubmitReviewModal
 from gitkeeper.ui.overview_view import PROverviewView
 
@@ -209,6 +210,215 @@ async def test_pr_list_view_and_selection():
         assert option_list.highlighted == 2
         assert pr_list.active_prs[option_list.highlighted].pr.number == 105
 
+
+@pytest.mark.asyncio
+async def test_pr_list_option_shows_author_without_reason_chip():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr_with_metadata()],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option = option_list.get_option_at_index(0)
+        lines = str(option.prompt).splitlines()
+
+        assert len(lines) == 2
+        # Author sits on the first row alongside the repo short name.
+        assert "backend" in lines[0]
+        assert "@alice" in lines[0]
+        # No scoring-reason chip remains on the row.
+        assert "(" not in str(option.prompt)
+
+
+@pytest.mark.asyncio
+async def test_pr_list_long_title_ellipsized_flush_left():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr_with_metadata()],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option = option_list.get_option_at_index(0)
+        lines = str(option.prompt).splitlines()
+
+        # Title stays on its own single line: never wraps to a third row.
+        assert len(lines) == 2
+        title_line = lines[1]
+        # Flush-left: no leading indent on the title line.
+        assert title_line.startswith("fix: restore")
+        # Truncated with a trailing ellipsis to the row width.
+        assert title_line.endswith("…")
+        assert len(title_line) == ROW_WIDTH
+        assert "…" not in title_line[:-1]
+
+
+@pytest.mark.asyncio
+async def test_pr_list_short_title_untruncated():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(102, TriageTier.T2)],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option = option_list.get_option_at_index(0)
+        lines = str(option.prompt).splitlines()
+
+        assert lines[1] == "PR 102"
+        assert "…" not in lines[1]
+        assert len(lines) == 2
+
+
+@pytest.mark.asyncio
+async def test_pr_list_rows_shrink_when_window_is_narrow():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr_with_metadata()],
+    )
+    async with app.run_test(size=(30, 40)) as pilot:
+        await pilot.pause()
+        option_list = app.query_one("#pr-option-list", OptionList)
+        lines = str(option_list.get_option_at_index(0).prompt).splitlines()
+
+        # Exactly two rows, author stays on line 1, title never wraps.
+        assert len(lines) == 2
+        assert "@alice" in lines[0]
+        assert lines[1].endswith("…")
+        assert len(lines[1]) <= ROW_WIDTH
+
+
+@pytest.mark.asyncio
+async def test_pr_list_rows_reflow_on_resize():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr_with_metadata()],
+    )
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        option_list = app.query_one("#pr-option-list", OptionList)
+        wide_length = len(str(option_list.get_option_at_index(0).prompt).splitlines()[1])
+
+        await pilot.resize_terminal(30, 40)
+        await pilot.pause()
+
+        option_list = app.query_one("#pr-option-list", OptionList)
+        lines = str(option_list.get_option_at_index(0).prompt).splitlines()
+        assert len(lines) == 2
+        assert "@alice" in lines[0]
+        assert len(lines[1]) < wide_length
+        assert lines[1].endswith("…")
+
+
+
+def _make_mock_scored_pr_with_wide_metadata(number: int) -> ScoredPullRequest:
+    pr = PullRequestData(
+        id=f"PR_{number}",
+        number=number,
+        title=f"폭넓은 제목 {number} " + "가" * 40,
+        body="## Changes\n- Added OAuth2 JWT flow",
+        url=f"https://github.com/acme/backend/pull/{number}",
+        repo_name_with_owner="acme/한국어-리포지토리-이름이-아주-깁니다",
+        author="팀개발자아이디가무척길어요",
+        is_draft=False,
+        state="OPEN",
+        created_at="2026-08-14T10:00:00Z",
+        updated_at="2026-08-15T12:00:00Z",
+        additions=10,
+        deletions=5,
+        changed_files_count=2,
+        ci_status="SUCCESS",
+    )
+    score = ScoreBreakdown(
+        tier=TriageTier.T1,
+        affinity_points=30.0,
+        rationale="Author teammate",
+    )
+    return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
+
+
+def _make_mock_scored_pr_long_repo(number: int) -> ScoredPullRequest:
+    pr = PullRequestData(
+        id=f"PR_{number}",
+        number=number,
+        title=LONG_PR_TITLE,
+        body="## Changes\n- Added OAuth2 JWT flow",
+        url=f"https://github.com/acme/backend/pull/{number}",
+        repo_name_with_owner="acme/backend-services-platform-team-repo",
+        author="alice",
+        is_draft=False,
+        state="OPEN",
+        created_at="2026-08-14T10:00:00Z",
+        updated_at="2026-08-15T12:00:00Z",
+        additions=134,
+        deletions=23,
+        changed_files_count=7,
+        ci_status="SUCCESS",
+    )
+    score = ScoreBreakdown(
+        tier=TriageTier.T1,
+        affinity_points=24.0,
+        rationale="Author teammate",
+    )
+    return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
+
+
+@pytest.mark.asyncio
+async def test_pr_list_entries_stay_two_rows_when_scrollable():
+    # A queue taller than the pane forces the vertical scrollbar to show,
+    # which steals columns from the option render width. Entries must stay
+    # exactly two rows even then.
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr_long_repo(1000 + i) for i in range(15)],
+    )
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause()
+        option_list = app.query_one("#pr-option-list", OptionList)
+
+        # Proof the list is actually scrollable (scrollbar visible).
+        assert option_list.virtual_size.height > option_list.content_region.height
+        assert option_list.scrollable_content_region.width < option_list.content_region.width
+
+        # Every entry is exactly two rows: metadata row + title row.
+        assert option_list.virtual_size.height == 2 * option_list.option_count
+        for idx in range(option_list.option_count):
+            lines = str(option_list.get_option_at_index(idx).prompt).splitlines()
+            assert len(lines) == 2, f"option {idx} wrapped to {len(lines)} rows"
+            assert "@alice" in lines[0], f"option {idx}: author not on metadata row"
+            assert lines[1].endswith("…"), f"option {idx}: title not truncated"
+
+
+@pytest.mark.asyncio
+async def test_pr_list_wide_glyphs_stay_two_rows():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr_with_wide_metadata(101 + i) for i in range(3)],
+    )
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        option_list = app.query_one("#pr-option-list", OptionList)
+
+        assert option_list.virtual_size.height == 2 * option_list.option_count
+        render_width = option_list.content_region.width
+        for idx in range(option_list.option_count):
+            lines = str(option_list.get_option_at_index(idx).prompt).splitlines()
+            assert len(lines) == 2, f"option {idx} wrapped to {len(lines)} rows"
+            assert "@" in lines[0], f"option {idx}: author not on metadata row"
+            assert cell_len(lines[0]) <= render_width, f"option {idx}: metadata row exceeds pane"
+            assert cell_len(lines[1]) <= render_width, f"option {idx}: title row exceeds pane"
+
+
+def test_truncate_measures_display_cells():
+    assert _truncate("가나다라마바사", 6) == "가나…"
+    assert _truncate("abcdefgh", 6) == "abcde…"
+    assert _truncate("짧음", 10) == "짧음"
+    assert _truncate("ascii", 10) == "ascii"
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.events import Resize
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Label, OptionList
 
@@ -133,6 +134,12 @@ class GitkeeperApp(App):
             self._load_scored_prs(self.initial_scored_prs)
         else:
             self.action_refresh_queue()
+
+    def on_resize(self, event: Resize) -> None:
+        try:
+            self.query_one("#pr-list-view", PRListView).refresh_row_width(event.size.width)
+        except Exception:
+            pass
 
     def _load_scored_prs(self, scored_prs: List[ScoredPullRequest]) -> None:
         pr_list_view = self.query_one("#pr-list-view", PRListView)
