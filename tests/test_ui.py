@@ -7,6 +7,7 @@ from typing import Optional
 from rich.cells import cell_len
 from rich.console import Console
 from textual.app import App, ComposeResult
+from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Markdown, OptionList, TextArea
 from gitkeeper.config import Config
 from gitkeeper.diff.parser import UnifiedDiffParser
@@ -36,6 +37,19 @@ def _make_mock_scored_pr(
     return _make_mock_scored_pr_with_body(
         number, follow_state, "## Changes\n- Added OAuth2 JWT flow", updated_at
     )
+
+
+def _visible_footer_keys(screen: Screen) -> list[str]:
+    """Return the visible footer hot keys in render order.
+
+    Applies the same ``binding.show`` filter the Footer widget uses, so hidden
+    bindings (navigation, search, etc.) never appear in the list.
+    """
+    return [
+        active.binding.key
+        for active in screen.active_bindings.values()
+        if active.binding.show
+    ]
 
 
 def _make_mock_scored_pr_with_body(
@@ -1446,6 +1460,51 @@ async def test_review_scoped_keys_hidden_while_modal_open():
 
         app.screen.dismiss(None)
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_footer_open_key_third_in_pr_list_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option_list.focus()
+        await pilot.pause()
+
+        assert _visible_footer_keys(app.screen) == ["q", "r", "o"]
+
+
+@pytest.mark.asyncio
+async def test_footer_open_key_third_in_diff_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        await pilot.pause()
+
+        assert _visible_footer_keys(app.screen) == ["q", "r", "o", "c", "s", "w"]
+
+
+@pytest.mark.asyncio
+async def test_footer_open_key_third_in_file_list_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        file_list = app.query_one("#file-option-list", OptionList)
+        file_list.focus()
+        await pilot.pause()
+
+        assert _visible_footer_keys(app.screen) == ["q", "r", "o", "c", "s", "w"]
 
 
 @pytest.mark.asyncio

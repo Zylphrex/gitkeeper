@@ -77,10 +77,10 @@ class GitkeeperApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh_queue", "Refresh"),
+        Binding("o", "open_browser", "Open in Browser"),
         Binding("tab", "switch_focus", "Switch Pane", show=False),
         Binding("c", "comment_action", "Comment"),
         Binding("s", "submit_review", "Submit Review"),
-        Binding("o", "open_browser", "Open in Browser"),
         Binding("w", "hide_whitespace", "Hide Whitespace"),
         Binding("j", "vim_down", "Down", show=False),
         Binding("down", "vim_down", "Down", show=False),
