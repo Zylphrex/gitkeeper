@@ -8,7 +8,7 @@ Provides a consistent Vim-inspired keyboard navigation system across all TUI wid
 The system SHALL provide Vim-style motion keys that work consistently across all scrollable and list-based widgets, with arrow keys `up`/`down` behaving identically to `j`/`k`.
 
 #### Scenario: Navigate up and down with j/k
-- **WHEN** the user is focused on any scrollable or list widget (PR list, overview body, file list, diff viewer)
+- **WHEN** the user is focused on any scrollable or list widget (PR list, file list, diff viewer)
 - **THEN** pressing `j` SHALL move the cursor or scroll one position down
 - **AND** pressing `k` SHALL move the cursor or scroll one position up
 

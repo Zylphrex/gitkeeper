@@ -4,7 +4,7 @@ Provides a full-screen interactive terminal interface (TUI) for navigating ranke
 
 ## Requirements
 ### Requirement: Interactive PR Queue Navigation
-The system SHALL provide a full-screen interactive interface listing all actionable pull requests in a single flat queue sorted by most recent activity (newest first) with keyboard and mouse navigation, where every row is labeled with whether the next move is the user's.
+The system SHALL provide a persistent single-queue interface listing all actionable pull requests in a flat list sorted by most recent activity (newest first), where every row is labeled with whether the next move is the user's, alongside a persistent overview section for the selected pull request.
 
 #### Scenario: Navigate the activity-sorted pull request queue
 - **WHEN** the TUI application loads
@@ -17,11 +17,10 @@ The system SHALL provide a full-screen interactive interface listing all actiona
 - **AND** each entry SHALL render as exactly two rows total (one metadata row containing the action glyph, number, repository name, and author, followed by one title row), which SHALL hold regardless of how many entries the queue contains
 - **AND** the metadata row SHALL NOT wrap: when the repository name, author, and action glyph do not fit within the available row width, the repository name SHALL be truncated with a trailing ellipsis (`…`) to fit
 - **AND** the metadata row SHALL prefer leaving the author un-truncated when space is tight, truncating the repository name further before shortening the author
-- **AND** the available row width used for truncation SHALL account for any vertical scrollbar shown by the list, so that truncation limits never exceed the width at which entries are actually rendered
 - **AND** the user SHALL be able to select and highlight different pull requests using Vim-style navigation keys (`j`/`k` for up/down, `gg`/`G` for top/bottom, `Ctrl+d`/`Ctrl+u` for paging), arrow keys, or mouse selection
 - **AND** the pull request number in each entry SHALL be rendered as a clickable terminal hyperlink to the pull request URL when a URL is available
 
-#### Scenario: Queue entries remain two rows when the list scrolls
+#### Scenario: Queue rows stay two rows tall when the list scrolls
 - **WHEN** the queue contains more entries than fit in the pane, so that the list displays a vertical scrollbar
 - **THEN** each entry SHALL still render as exactly two rows with the action glyph and author on the metadata row
 - **AND** the title SHALL appear as a single truncated line on its own row rather than wrapping or being clipped
@@ -29,19 +28,21 @@ The system SHALL provide a full-screen interactive interface listing all actiona
 #### Scenario: Display selected PR overview and rationale
 - **WHEN** a pull request is selected or clicked in the queue list
 - **THEN** the system SHALL display the PR metadata, full description, a worded action-state line (awaiting the user's action, waiting on author, or waiting on others) and, when available, the reason chips that produced it (e.g., directly requested, re-review due, respond to review)
-- **AND** the metadata SHALL be rendered in full: any metadata line that exceeds the overview panel width SHOULD wrap at the panel edge and never be clipped or overflow off-screen
+- **AND** the overview SHALL render in a fixed-height full-width row at the bottom of the interface, divided into two columns: the metadata and rationale on the left, and the PR description on the right
+- **AND** the metadata SHALL be rendered in full: any metadata line that exceeds the left column width SHOULD wrap at the column edge and never be clipped or overflow off-screen
 - **AND** the metadata SHALL include the repository, author, draft state, base and head branch refs, CI status, addition/deletion counts, changed file count, created date, relative time since last update, requested reviewers, a compact summary of existing reviews, and the latest author push time
 - **AND** the metadata SHALL include a viewer-action status line stating what the current viewer has already done on the PR: never reviewed, approved, requested changes, or commented, including any inline comment count once diff threads are loaded and the relative time of the viewer's most recent action
 - **AND** the viewer status SHALL indicate when a re-review is due because the author pushed after the viewer's last review
 - **AND** the viewer status SHALL include the number of pending draft comments authored in the current session for that PR
-- **AND** the metadata and rationale boxes SHALL size to their content so the PR body retains the remaining panel height
+- **AND** the metadata and rationale boxes SHALL size to their content within the fixed bottom-row height
+- **AND** the description SHALL render as a non-scrollable preview showing as much of the description as fits the fixed bottom-right column, without a scrollbar or focus target
 - **AND** the overview section SHALL remain visible while the user inspects the diff pane for the selected pull request
 - **AND** the system SHALL synchronize the diff viewer with the newly selected pull request
 - **AND** the pull request number in the overview header SHALL be rendered as a clickable terminal hyperlink to the pull request URL when a URL is available
 
 #### Scenario: Overview is not a tab
 - **WHEN** the TUI application loads
-- **THEN** the overview section SHALL be visible on the far right without requiring tab switching
+- **THEN** the overview section SHALL be visible in the fixed-height bottom row without requiring tab switching
 - **AND** the overview section SHALL NOT be selectable as a tab
 - **AND** the diff pane SHALL be rendered as a plain, always-visible pane without a labeled tab bar
 - **AND** the system SHALL NOT provide a dedicated keyboard shortcut for switching to the diff pane
@@ -60,6 +61,7 @@ The system SHALL provide a full-screen interactive interface listing all actiona
 - **WHEN** the user presses the open-in-browser key (`o`) while no pull request is selected
 - **THEN** the system SHALL report that no pull request is selected
 - **AND** the system SHALL NOT attempt to open a browser
+
 ### Requirement: In-TUI Diff Viewer
 The system SHALL provide an interactive diff viewer allowing users to inspect file changes and patches for the selected pull request directly within the terminal interface. The changed-files list SHALL render as a compact directory tree in which every row fits on a single line.
 

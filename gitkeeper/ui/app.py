@@ -55,6 +55,13 @@ class GitkeeperApp(App):
         height: 1fr;
     }
 
+    #bottom-row {
+        width: 1fr;
+        height: 40%;
+        max-height: 16;
+        border-top: solid $primary;
+    }
+
     #status-bar {
         background: $panel;
         color: $text-muted;
@@ -129,6 +136,7 @@ class GitkeeperApp(App):
             yield PRListView(id="pr-list-view")
             with Vertical(id="right-tabs"):
                 yield PRDiffView(id="pr-diff-view")
+        with Horizontal(id="bottom-row"):
             yield PROverviewView(id="pr-overview-view")
         yield Input(id="search-input", placeholder="/ — search (Enter to confirm, Esc to cancel)")
         yield Label("Ready", id="status-bar")

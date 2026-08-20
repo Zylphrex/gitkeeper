@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import VerticalGroup, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalGroup
 from textual.widget import Widget
 from textual.widgets import Label, Markdown
 
@@ -147,18 +147,28 @@ class PROverviewView(Widget):
 
     DEFAULT_CSS = """
     PROverviewView {
-        height: 1fr;
-        width: 44;
-        border-left: solid $primary;
+        height: 100%;
+        width: 1fr;
         padding: 0 1;
+    }
+
+    #overview-row {
+        width: 1fr;
+        height: 100%;
+    }
+
+    #overview-left {
+        width: 2fr;
+        height: auto;
     }
 
     #pr-meta-box {
         background: $panel;
-        padding: 1;
-        margin-bottom: 1;
+        padding: 0 1;
+        margin-right: 0;
         border-left: thick $primary;
-        height: auto;
+        height: 1fr;
+        overflow-y: hidden;
     }
 
     #pr-title {
@@ -169,15 +179,15 @@ class PROverviewView(Widget):
     #pr-meta-info {
         color: $text-muted;
         width: 1fr;
-        text-overflow: ellipsis;
+        text-wrap: wrap;
     }
 
     #pr-score-box {
         background: $surface;
-        padding: 1;
-        margin-bottom: 1;
+        padding: 0 1;
         border-left: thick $accent;
         height: auto;
+        dock: bottom;
     }
 
     #pr-score-title {
@@ -192,10 +202,9 @@ class PROverviewView(Widget):
         width: 1fr;
     }
 
-    #pr-body-scroll {
+    #pr-body-markdown {
+        width: 3fr;
         height: 1fr;
-        border: solid $panel;
-        padding: 0 1;
     }
     """
 
@@ -212,16 +221,17 @@ class PROverviewView(Widget):
         self.draft_count: int = 0
 
     def compose(self) -> ComposeResult:
-        with VerticalGroup(id="pr-meta-box"):
-            yield Label("Select a PR from the queue", id="pr-title")
-            yield Label("", id="pr-meta-info")
+        with Horizontal(id="overview-row"):
+            with Vertical(id="overview-left"):
+                with VerticalGroup(id="pr-meta-box"):
+                    yield Label("Select a PR from the queue", id="pr-title")
+                    yield Label("", id="pr-meta-info")
 
-        with VerticalGroup(id="pr-score-box"):
-            yield Label("[bold]💡 Why this is relevant to you:[/bold]", id="pr-score-title")
-            yield Label("", id="pr-score-rationale")
-            yield Label("", id="pr-score-breakdown")
+                with VerticalGroup(id="pr-score-box"):
+                    yield Label("[bold]💡 Why this is relevant to you:[/bold]", id="pr-score-title")
+                    yield Label("", id="pr-score-rationale")
+                    yield Label("", id="pr-score-breakdown")
 
-        with VerticalScroll(id="pr-body-scroll"):
             yield Markdown("", id="pr-body-markdown")
 
     def update_pr(
