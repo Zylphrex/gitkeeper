@@ -25,12 +25,6 @@ class RepositoriesConfig(BaseModel):
 
 class HeuristicsConfig(BaseModel):
     lookback_days: int = Field(default=180, description="Git history lookback in days")
-    hot_window_hours: int = Field(
-        default=6, description="Author pushes within this window count as hot"
-    )
-    min_affinity_files: int = Field(
-        default=1, description="Minimum touched files to qualify as T2 team-affinity"
-    )
     ignore_drafts: bool = Field(default=True, description="Filter out draft PRs")
     ignore_failing_ci: bool = Field(default=True, description="Filter out failing CI PRs")
     ignored_paths: List[str] = Field(
@@ -51,16 +45,6 @@ class GitConfig(BaseModel):
 class FollowUpConfig(BaseModel):
     include_authored: bool = Field(
         default=True, description="Fetch open PRs authored by the user"
-    )
-    show_waiting_on_author: bool = Field(
-        default=True, description="Render the waiting-on-author band"
-    )
-    show_waiting_on_others: bool = Field(
-        default=True, description="Render the waiting-on-others band"
-    )
-    staleness_warn_after_days: int = Field(
-        default=3,
-        description="Flag active follow-ups outstanding beyond this many days",
     )
 
 
@@ -130,6 +114,21 @@ def load_config(config_path: Optional[Path] = None) -> Config:
             "heuristics.min_score_threshold is deprecated and no longer used; "
             "PRs are no longer hidden by a score threshold. Remove the key from your config."
         )
+
+    removed_followup_keys = (
+        "show_waiting_on_author",
+        "show_waiting_on_others",
+        "staleness_warn_after_days",
+    )
+    followup_data = expanded_data.get("followup")
+    if isinstance(followup_data, dict):
+        for key in removed_followup_keys:
+            if key in followup_data:
+                log.warning(
+                    f"followup.{key} is deprecated and no longer used; "
+                    "the queue is a single flat list with per-row action badges. "
+                    "Remove the key from your config."
+                )
 
     config = Config.model_validate(expanded_data)
 

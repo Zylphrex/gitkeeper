@@ -2,22 +2,17 @@ import os
 import subprocess
 from pathlib import Path
 import pytest
-from gitkeeper.git.decay import PathTouchScore, compute_decay_score_for_touches
-from gitkeeper.git.inspector import inspect_path_touches
+from gitkeeper.git.inspector import PathTouchScore, inspect_path_touches
 
 
-def test_decay_score_calculation():
-    scores = [
-        PathTouchScore(path="a.py", touches_recent_90d=2),
-        PathTouchScore(path="b.py", touches_90_180d=1),
-        PathTouchScore(path="c.py", touches_older=3),
-    ]
-    # a.py = 10, b.py = 5, c.py = 2 -> total = 17
-    assert compute_decay_score_for_touches(scores) == 17.0
-
-    # Max points cap
-    many_scores = [PathTouchScore(path=f"f{i}.py", touches_recent_90d=1) for i in range(10)]
-    assert compute_decay_score_for_touches(many_scores, max_affinity_points=50.0) == 50.0
+def test_path_touch_score_total():
+    score = PathTouchScore(
+        path="a.py",
+        touches_recent_90d=2,
+        touches_90_180d=1,
+        touches_older=3,
+    )
+    assert score.total_touches == 6
 
 
 def test_git_inspector_with_real_repo(tmp_path):

@@ -8,18 +8,10 @@ from gitkeeper.repos import RepoLocator
 from gitkeeper.scoring.calculator import (
     FollowUpState,
     ScoreBreakdown,
-    TriageTier,
-    assign_triage_tier,
+    derive_action_reasons,
     derive_followup_state,
-    staleness_anchor_dt,
-    wait_age_hours,
 )
 from gitkeeper.scoring.gates import is_actionable
-
-WAITING_LABELS = {
-    FollowUpState.WAITING_AUTHOR: "waiting on author",
-    FollowUpState.WAITING_OTHERS: "waiting on others",
-}
 
 
 @dataclass
@@ -28,14 +20,6 @@ class ScoredPullRequest:
     score: ScoreBreakdown
     is_actionable: bool
     drop_reason: Optional[str] = None
-
-
-def _push_age_hours(pr: PullRequestData) -> float:
-    try:
-        pushed = datetime.fromisoformat(pr.pushed_at.replace("Z", "+00:00"))
-        return max(0.0, (datetime.now(timezone.utc) - pushed).total_seconds() / 3600.0)
-    except (ValueError, AttributeError):
-        return float("inf")
 
 
 def _waiting_label(
@@ -48,43 +32,27 @@ def _waiting_label(
     return "approved"
 
 
-def queue_sort_key(item: ScoredPullRequest):
-    """Band-first deterministic ordering.
+def _activity_timestamp(pr: PullRequestData) -> Optional[datetime]:
+    """Parse the most recent activity timestamp (updated_at) for recency sorting."""
+    if not pr.updated_at:
+        return None
+    try:
+        return datetime.fromisoformat(pr.updated_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
 
-    Active (ball-on-user) items first, sorted by tier then heat then size;
-    waiting-band items afterwards sorted by how long the user's own last act
-    has been unhonored (oldest first); non-actionable items last.
+
+def activity_sort_key(item: ScoredPullRequest):
+    """Order actionable PRs by most recent activity (newest first), tie-break deterministically.
+
+    Uses GitHub's updated_at timestamp which reflects commits, comments,
+    reviews, and state changes. Unparseable/empty timestamps sort oldest.
     """
-    score = item.score
-    active = item.is_actionable and score.follow_state == FollowUpState.ME_ACTIVE
-    waiting = item.is_actionable and not active
-
-    if active:
-        return (
-            0,
-            score.tier,
-            _push_age_hours(item.pr),
-            (item.pr.additions + item.pr.deletions),
-            item.pr.repo_name_with_owner,
-            item.pr.number,
-            "",
-        )
-    if waiting:
-        wait_age = score.wait_age_hours if score.wait_age_hours is not None else float("inf")
-        return (
-            1,
-            -wait_age,
-            0,
-            0,
-            item.pr.repo_name_with_owner,
-            item.pr.number,
-            "",
-        )
+    ts = _activity_timestamp(item.pr)
+    if ts is None:
+        ts = datetime.min.replace(tzinfo=timezone.utc)
     return (
-        2,
-        TriageTier.T3,
-        float("inf"),
-        0,
+        -ts.timestamp(),
         item.pr.repo_name_with_owner,
         item.pr.number,
         "",
@@ -102,8 +70,6 @@ class RelevancePipeline:
         if username and username not in author_ids:
             author_ids.append(username)
 
-        followup = self.config.followup
-
         results: List[ScoredPullRequest] = []
 
         for pr in prs:
@@ -120,66 +86,34 @@ class RelevancePipeline:
                 )
                 continue
 
-            # 2. Follow-up turn state
+            # 2. Follow-up turn state: whose move is it?
             state = derive_followup_state(pr, username)
-
-            hidden_by_config = (
-                state == FollowUpState.WAITING_AUTHOR
-                and not followup.show_waiting_on_author
-            ) or (
-                state == FollowUpState.WAITING_OTHERS
-                and not followup.show_waiting_on_others
-            )
-            if hidden_by_config:
-                label = WAITING_LABELS.get(state, "waiting")
-                results.append(
-                    ScoredPullRequest(
-                        pr=pr,
-                        score=ScoreBreakdown(follow_state=state),
-                        is_actionable=False,
-                        drop_reason=f"waiting band hidden ({label})",
-                    )
-                )
-                continue
-
-            # 3. Local Git Context Inspection
-            repo_path = self.repo_locator.resolve(pr.repo_name_with_owner)
-            has_clone = repo_path is not None
-            paths = [f.path for f in pr.files]
-
-            touch_scores_dict = {}
-            if has_clone and repo_path:
-                touch_scores_dict = inspect_path_touches(
-                    repo_dir=repo_path,
-                    paths=paths,
-                    author_identifiers=author_ids,
-                    lookback_days=self.config.heuristics.lookback_days,
-                )
-
-            touch_scores = list(touch_scores_dict.values())
-
-            # 4. Assign triage tier only for ball-on-user items; waiting-band
-            #    items carry no tier, just their waiting label and recency.
             score_breakdown = ScoreBreakdown()
+            score_breakdown.follow_state = state
+
             if state == FollowUpState.ME_ACTIVE:
-                score_breakdown = assign_triage_tier(
+                # 3. Local Git Context Inspection (overview chip only, never ranks)
+                repo_path = self.repo_locator.resolve(pr.repo_name_with_owner)
+                paths = [f.path for f in pr.files]
+                touch_scores = []
+                if repo_path is not None:
+                    touch_scores_dict = inspect_path_touches(
+                        repo_dir=repo_path,
+                        paths=paths,
+                        author_identifiers=author_ids,
+                        lookback_days=self.config.heuristics.lookback_days,
+                    )
+                    touch_scores = list(touch_scores_dict.values())
+
+                reasons, rationale = derive_action_reasons(
                     pr=pr,
                     touch_scores=touch_scores,
                     current_username=username,
                     heuristics=self.config.heuristics,
-                    has_local_clone=has_clone,
                 )
-            score_breakdown.follow_state = state
-
-            # 5. Waiting / staleness overlays
-            if state == FollowUpState.ME_ACTIVE:
-                anchor = staleness_anchor_dt(pr, username, state)
-                if anchor is not None:
-                    days = (datetime.now(timezone.utc) - anchor).total_seconds() / 86400.0
-                    if days > followup.staleness_warn_after_days:
-                        score_breakdown.stale_days = int(days)
+                score_breakdown.reasons = list(reasons)
+                score_breakdown.rationale = rationale
             else:
-                score_breakdown.wait_age_hours = wait_age_hours(pr, username)
                 score_breakdown.waiting_label = _waiting_label(pr, username, state)
                 score_breakdown.rationale = score_breakdown.waiting_label or "waiting"
 
@@ -192,8 +126,5 @@ class RelevancePipeline:
                 )
             )
 
-        # Sort actionable PRs first (priority tier, then heat, size, and a
-        # deterministic tie-break), then the waiting band, with non-actionable
-        # PRs at the tail.
-        results.sort(key=queue_sort_key)
+        results.sort(key=activity_sort_key)
         return results

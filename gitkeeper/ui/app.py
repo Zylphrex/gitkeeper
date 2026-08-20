@@ -11,7 +11,7 @@ from textual.widgets import Footer, Input, Label, OptionList
 from gitkeeper.config import Config
 from gitkeeper.github.client import DraftReviewComment, GitHubGraphQLClient, PullRequestData, ReviewThread
 from gitkeeper.repos import RepoLocator
-from gitkeeper.scoring.calculator import FollowUpState
+from gitkeeper.scoring.calculator import FollowUpState, derive_viewer_status
 from gitkeeper.scoring.pipeline import RelevancePipeline, ScoredPullRequest
 from gitkeeper.ui.diff_view import PRDiffView
 from gitkeeper.ui.header import AppHeader
@@ -162,10 +162,10 @@ class GitkeeperApp(App):
         )
         if waiting_count:
             status_bar.update(
-                f"Loaded {active_count} to review · {waiting_count} waiting."
+                f"Loaded {active_count} awaiting your action · {waiting_count} waiting."
             )
         else:
-            status_bar.update(f"Loaded {active_count} review requests.")
+            status_bar.update(f"Loaded {active_count} relying on you.")
         selected = pr_list_view.get_selected_pr()
         if selected:
             self._select_pr(selected)
@@ -179,15 +179,46 @@ class GitkeeperApp(App):
     def on_pr_list_view_pr_selected(self, event: PRListView.PRSelected) -> None:
         self._select_pr(event.scored_pr)
 
+    def _pr_key(self, pr: PullRequestData) -> str:
+        return f"{pr.repo_name_with_owner}#{pr.number}"
+
+    def _own_thread_count(self, pr_key: str) -> int:
+        """Count thread comments the current viewer authored in the cached threads."""
+        username = self.config.github.user
+        if not username:
+            return 0
+        count = 0
+        for thread in self.cached_thread.get(pr_key, []):
+            for c in thread.comments:
+                if c.author.lower() == username.lower():
+                    count += 1
+        return count
+
+    def _refresh_overview(self) -> None:
+        """Re-render the overview for the current PR with the latest viewer state."""
+        scored = self.current_scored_pr
+        if not scored:
+            return
+        username = self.config.github.user
+        pr_key = self._pr_key(scored.pr)
+        status = derive_viewer_status(scored.pr, username) if username else None
+        try:
+            overview_view = self.query_one("#pr-overview-view", PROverviewView)
+        except Exception:
+            return
+        overview_view.update_pr(
+            scored,
+            viewer_login=username,
+            viewer_status=status,
+            own_thread_count=self._own_thread_count(pr_key),
+            draft_count=len(self.draft_comments.get(pr_key, [])),
+        )
+
     def _select_pr(self, scored_pr: ScoredPullRequest) -> None:
         if self.current_scored_pr is scored_pr:
             return
         self.current_scored_pr = scored_pr
-        try:
-            overview_view = self.query_one("#pr-overview-view", PROverviewView)
-            overview_view.update_pr(scored_pr)
-        except Exception:
-            pass
+        self._refresh_overview()
 
         # Clear or load diff
         pr_key = f"{scored_pr.pr.repo_name_with_owner}#{scored_pr.pr.number}"
@@ -216,9 +247,15 @@ class GitkeeperApp(App):
         diff_text = self.cached_diffs.get(pr_key, "")
         comments = self.draft_comments.get(pr_key, [])
         threads = self.cached_thread.get(pr_key, [])
-        diff_view.load_diff(diff_text, threads, comments)
+        diff_view.load_diff(
+            diff_text,
+            threads,
+            comments,
+            viewer_login=self.config.github.user,
+        )
         if self._diff_loading_key == pr_key:
             self._diff_loading_key = None
+        self._refresh_overview()
 
     def _display_diff_error(self, pr_key: str, message: str) -> None:
         if not self.current_scored_pr:
@@ -516,6 +553,7 @@ class GitkeeperApp(App):
             self.draft_comments.setdefault(pr_key, []).append(draft)
             diff_view = self.query_one("#pr-diff-view", PRDiffView)
             diff_view.add_draft_comment(event.file_path, event.line_no, comment_text)
+            self._refresh_overview()
             self._set_status(f"Added comment on {event.file_path}:{event.line_no}")
 
         self.push_screen(

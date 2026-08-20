@@ -3,27 +3,14 @@ from datetime import datetime, timezone
 from enum import IntEnum
 from typing import List, Optional
 from gitkeeper.config import HeuristicsConfig
-from gitkeeper.git.decay import PathTouchScore, compute_decay_score_for_touches
+from gitkeeper.git.inspector import PathTouchScore
 from gitkeeper.github.client import PullRequestData
 
 VERDICT_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
 
 
-class TriageTier(IntEnum):
-    """Priority tiers, ascending: T0 is the highest urgency."""
-
-    T0 = 0
-    T1 = 1
-    T2 = 2
-    T3 = 3
-
-
 class FollowUpState(IntEnum):
-    """Whose turn it is on a pull request.
-
-    Ascending only for stable storage: ME_ACTIVE sorts into the active band,
-    the two waiting states into the always-visible waiting band.
-    """
+    """Whose turn it is on a pull request."""
 
     ME_ACTIVE = 0
     WAITING_AUTHOR = 1
@@ -31,14 +18,24 @@ class FollowUpState(IntEnum):
 
 
 @dataclass
+class ViewerStatus:
+    """The current viewer's recorded actions on a pull request.
+
+    Derived from review records already fetched from GitHub (author, state,
+    submitted timestamp), not from any new data source.
+    """
+
+    has_reviewed: bool = False
+    verdict: Optional[str] = None  # APPROVED / CHANGES_REQUESTED / DISMISSED
+    verdict_at: Optional[datetime] = None
+    re_review_due: bool = False
+
+
+@dataclass
 class ScoreBreakdown:
-    tier: TriageTier = TriageTier.T3
-    affinity_points: float = 0.0
+    follow_state: FollowUpState = FollowUpState.ME_ACTIVE
     rationale: str = ""
     reasons: List[str] = field(default_factory=list)
-    follow_state: FollowUpState = FollowUpState.ME_ACTIVE
-    stale_days: Optional[int] = None
-    wait_age_hours: Optional[float] = None
     waiting_label: Optional[str] = None
 
 
@@ -87,16 +84,6 @@ def _is_bottleneck(pr: PullRequestData, current_username: Optional[str]) -> bool
         if req.login_or_slug.lower() not in verdict_authors:
             return False
     return True
-
-
-def _is_hot(pr: PullRequestData, heuristics: HeuristicsConfig) -> bool:
-    if not pr.pushed_at:
-        return False
-    pushed_dt = _parse_dt(pr.pushed_at)
-    if pushed_dt is None:
-        return False
-    age_hours = (datetime.now(timezone.utc) - pushed_dt).total_seconds() / 3600.0
-    return age_hours <= heuristics.hot_window_hours
 
 
 def _re_review_due(pr: PullRequestData, current_username: Optional[str]) -> bool:
@@ -201,101 +188,58 @@ def _latest_my_verdict(
     return state
 
 
-def staleness_anchor_dt(
-    pr: PullRequestData,
-    current_username: Optional[str],
-    state: FollowUpState,
-) -> Optional[datetime]:
-    """Timestamp from which an active-band follow-up has been waiting on the user."""
-    if state != FollowUpState.ME_ACTIVE or not current_username:
-        return None
+def derive_viewer_status(
+    pr: PullRequestData, current_username: Optional[str]
+) -> ViewerStatus:
+    """Summarize the viewer's own recorded actions on a pull request.
 
-    pushed = _parse_dt(pr.pushed_at)
-    my_act = _latest_my_review_dt(pr, current_username)
-
-    if _is_author(pr, current_username) and _latest_external_verdict_dt(pr, current_username):
-        return pushed or _parse_dt(pr.created_at)
-
-    if my_act is not None and pushed is not None and pushed > my_act:
-        return pushed  # re-review outstanding: author acted after me
-
-    # Plain review-request case: GitHub's GraphQL schema exposes no timestamp
-    # on a ReviewRequest, so the PR creation time is the staleness clock.
-    created = _parse_dt(pr.created_at) if pr.created_at else None
-    if created is not None:
-        return created
-    return None
+    Returns ``None``-safe values on all inputs (including a missing
+    username), mirroring how the band logic treats unknown viewers.
+    """
+    latest_mine = _latest_my_review_dt(pr, current_username)
+    if latest_mine is None:
+        return ViewerStatus()
+    return ViewerStatus(
+        has_reviewed=True,
+        verdict=_latest_my_verdict(pr, current_username),
+        verdict_at=latest_mine,
+        re_review_due=_re_review_due(pr, current_username),
+    )
 
 
-def wait_age_hours(pr: PullRequestData, current_username: Optional[str]) -> Optional[float]:
-    """How many hours since the user's most recent act on a waiting pull request."""
-    anchors = []
-    my_review = _latest_my_review_dt(pr, current_username)
-    if my_review is not None:
-        anchors.append(my_review)
-    if _is_author(pr, current_username):
-        pushed = _parse_dt(pr.pushed_at)
-        if pushed is not None:
-            anchors.append(pushed)
-    if not anchors:
-        return None
-    latest = max(anchors)
-    return max(0.0, (datetime.now(timezone.utc) - latest).total_seconds() / 3600.0)
-
-
-def assign_triage_tier(
+def derive_action_reasons(
     pr: PullRequestData,
     touch_scores: List[PathTouchScore],
     current_username: Optional[str],
     heuristics: HeuristicsConfig,
-    has_local_clone: bool = True,
-) -> ScoreBreakdown:
+) -> tuple[list[str], str]:
+    """Produce the observable reasons a pull request is actionable, without tiers.
+
+    Returns ``(reasons, rationale)`` where rationale joins the chips so the
+    overview can show why the pull request is worth acting on.
     """
-    Assign a triage tier and the reason chips that justify it.
+    reasons: list[str] = []
 
-    First match wins, which keeps a direct request structurally above a team
-    ask: T0 (bottleneck) > T1 (waiting, hot, re-review) > T2 (team affinity)
-    > T3 (everything else actionable).
-    """
-    breakdown = ScoreBreakdown()
-
-    touched_files = sum(1 for ts in touch_scores if ts.total_touches > 0)
-    if has_local_clone and touch_scores:
-        breakdown.affinity_points = compute_decay_score_for_touches(
-            touch_scores, max_affinity_points=50.0
-        )
-    elif not has_local_clone:
-        breakdown.affinity_points = 15.0
-
-    ci_ok = pr.ci_status not in ("FAILURE", "ERROR")
-    directly_requested = _is_direct_request(pr, current_username)
-    hot = _is_hot(pr, heuristics)
-    re_review_due = _re_review_due(pr, current_username)
-    respond_to_review = False
+    if _is_bottleneck(pr, current_username):
+        reasons.append("you're the bottleneck")
+    elif _is_direct_request(pr, current_username):
+        reasons.append("directly requested")
+    if _re_review_due(pr, current_username):
+        reasons.append("re-review due")
     if _is_author(pr, current_username):
         pushed = _parse_dt(pr.pushed_at)
         external = _latest_external_verdict_dt(pr, current_username)
-        respond_to_review = external is not None and (pushed is None or external > pushed)
+        if external is not None and (pushed is None or external > pushed):
+            reasons.append("respond to review")
 
-    if directly_requested and ci_ok and _is_bottleneck(pr, current_username):
-        breakdown.tier = TriageTier.T0
-        breakdown.reasons.append("you're the bottleneck")
-    elif directly_requested or hot or re_review_due or respond_to_review:
-        breakdown.tier = TriageTier.T1
-        if directly_requested:
-            breakdown.reasons.append("directly requested")
-        if hot:
-            breakdown.reasons.append("author pushed recently")
-        if re_review_due:
-            breakdown.reasons.append("re-review due")
-        if respond_to_review:
-            breakdown.reasons.append("respond to review")
-    elif _has_team_request(pr) and touched_files >= heuristics.min_affinity_files:
-        breakdown.tier = TriageTier.T2
-        breakdown.reasons.append(f"touched {touched_files}/{len(pr.files)} files")
+    touched_files = sum(1 for ts in touch_scores if ts.total_touches > 0)
+    if touched_files:
+        reasons.append(f"touched {touched_files}/{len(pr.files)} files")
+
+    if reasons:
+        rationale = ", ".join(reasons)
+    elif _has_team_request(pr):
+        rationale = "team request"
     else:
-        breakdown.tier = TriageTier.T3
-        breakdown.reasons.append("actionable")
-
-    breakdown.rationale = ", ".join(breakdown.reasons) if breakdown.reasons else "Any review"
-    return breakdown
+        rationale = "Any review"
+    return reasons, rationale

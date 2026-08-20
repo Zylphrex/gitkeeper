@@ -18,7 +18,7 @@ from gitkeeper.github.client import (
     ReviewerRequest,
     ThreadComment,
 )
-from gitkeeper.scoring.calculator import ScoreBreakdown, TriageTier
+from gitkeeper.scoring.calculator import FollowUpState, ScoreBreakdown
 from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
 from gitkeeper.ui.diff_view import DiffViewer, PRDiffView
@@ -29,13 +29,20 @@ from gitkeeper.ui.overview_view import PROverviewView
 
 
 def _make_mock_scored_pr(
-    number: int = 101, tier: TriageTier = TriageTier.T1
+    number: int = 101,
+    follow_state: FollowUpState = FollowUpState.ME_ACTIVE,
+    updated_at: str = "2026-08-15T12:00:00Z",
 ) -> ScoredPullRequest:
-    return _make_mock_scored_pr_with_body(number, tier, "## Changes\n- Added OAuth2 JWT flow")
+    return _make_mock_scored_pr_with_body(
+        number, follow_state, "## Changes\n- Added OAuth2 JWT flow", updated_at
+    )
 
 
 def _make_mock_scored_pr_with_body(
-    number: int, tier: TriageTier, body: str
+    number: int,
+    follow_state: FollowUpState = FollowUpState.ME_ACTIVE,
+    body: str = "## Changes\n- Some changes",
+    updated_at: str = "2026-08-15T12:00:00Z",
 ) -> ScoredPullRequest:
     pr = PullRequestData(
         id=f"PR_{number}",
@@ -48,15 +55,14 @@ def _make_mock_scored_pr_with_body(
         is_draft=False,
         state="OPEN",
         created_at="2026-08-14T10:00:00Z",
-        updated_at="2026-08-15T12:00:00Z",
+        updated_at=updated_at,
         additions=45,
         deletions=10,
         changed_files_count=2,
         ci_status="SUCCESS",
     )
     score = ScoreBreakdown(
-        tier=tier,
-        affinity_points=50.0,
+        follow_state=follow_state,
         rationale="Author teammate",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -100,8 +106,7 @@ def _make_mock_scored_pr_with_metadata() -> ScoredPullRequest:
         ],
     )
     score = ScoreBreakdown(
-        tier=TriageTier.T1,
-        affinity_points=24.0,
+        follow_state=FollowUpState.ME_ACTIVE,
         rationale="You touched 3 of 7 files recently; CI is green.",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -183,36 +188,31 @@ async def test_pr_list_view_and_selection():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T2),
-            _make_mock_scored_pr(101, TriageTier.T0),
-            _make_mock_scored_pr(103, TriageTier.T1),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_OTHERS, updated_at="2026-08-15T08:00:00Z"),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE, updated_at="2026-08-15T09:00:00Z"),
+            _make_mock_scored_pr(103, FollowUpState.ME_ACTIVE, updated_at="2026-08-15T10:00:00Z"),
         ],
     )
 
     async with app.run_test() as pilot:
         # Check initial widgets
         pr_list = app.query_one("#pr-list-view", PRListView)
-        # All 3 actionable PRs should be in active_prs sorted by tier (T0 first)
+        # All 3 actionable PRs in one flat list ordered by most recent activity.
         assert len(pr_list.active_prs) == 3
-        assert [p.pr.number for p in pr_list.active_prs] == [101, 103, 102]
-        assert [p.score.tier for p in pr_list.active_prs] == [
-            TriageTier.T0,
-            TriageTier.T1,
-            TriageTier.T2,
-        ]
+        assert [p.pr.number for p in pr_list.active_prs] == [103, 101, 102]
 
         overview = app.query_one("#pr-overview-view", PROverviewView)
         assert overview.scored_pr is not None
-        assert overview.scored_pr.pr.number == 101
+        assert overview.scored_pr.pr.number == 103
 
         # Test preserving selection across updates
         app._load_scored_prs([
-            _make_mock_scored_pr(104, TriageTier.T0),
-            _make_mock_scored_pr(101, TriageTier.T1),
-            _make_mock_scored_pr(105, TriageTier.T2),
+            _make_mock_scored_pr(104, FollowUpState.ME_ACTIVE, updated_at="2026-08-15T11:00:00Z"),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE, updated_at="2026-08-15T06:00:00Z"),
+            _make_mock_scored_pr(103, FollowUpState.ME_ACTIVE, updated_at="2026-08-15T07:00:00Z"),
         ])
-        assert overview.scored_pr.pr.number == 101
-        assert [p.pr.number for p in pr_list.active_prs] == [104, 101, 105]
+        assert overview.scored_pr.pr.number == 103
+        assert [p.pr.number for p in pr_list.active_prs] == [104, 103, 101]
 
         # Let the preserved-selection highlight event settle before acting.
         await pilot.pause()
@@ -230,7 +230,7 @@ async def test_pr_list_view_and_selection():
         await pilot.pause()
         # Check via synchronous state (the overview update is async)
         assert option_list.highlighted == 2
-        assert pr_list.active_prs[option_list.highlighted].pr.number == 105
+        assert pr_list.active_prs[option_list.highlighted].pr.number == 101
 
 
 @pytest.mark.asyncio
@@ -251,6 +251,28 @@ async def test_pr_list_option_shows_author_without_reason_chip():
         assert "@alice" in lines[0]
         # No scoring-reason chip remains on the row.
         assert "(" not in str(option.prompt)
+
+
+@pytest.mark.asyncio
+async def test_pr_list_action_badges():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_AUTHOR),
+            _make_mock_scored_pr(103, FollowUpState.WAITING_OTHERS),
+        ],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        prompts = [
+            str(option_list.get_option_at_index(i).prompt)
+            for i in range(option_list.option_count)
+        ]
+        assert any("awaiting you" in p for p in prompts)
+        assert any("wait: author" in p for p in prompts)
+        assert any("wait: others" in p for p in prompts)
 
 
 @pytest.mark.asyncio
@@ -281,7 +303,7 @@ async def test_pr_list_short_title_untruncated():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(102, TriageTier.T2)],
+        scored_prs=[_make_mock_scored_pr(102, FollowUpState.WAITING_OTHERS)],
     )
     async with app.run_test() as pilot:
         option_list = app.query_one("#pr-option-list", OptionList)
@@ -305,9 +327,9 @@ async def test_pr_list_rows_shrink_when_window_is_narrow():
         option_list = app.query_one("#pr-option-list", OptionList)
         lines = str(option_list.get_option_at_index(0).prompt).splitlines()
 
-        # Exactly two rows, author stays on line 1, title never wraps.
+        # Exactly two rows, action badge on line 1, title never wraps.
         assert len(lines) == 2
-        assert "@alice" in lines[0]
+        assert "awaiting you" in lines[0]
         assert lines[1].endswith("…")
         assert len(lines[1]) <= ROW_WIDTH
 
@@ -330,7 +352,7 @@ async def test_pr_list_rows_reflow_on_resize():
         option_list = app.query_one("#pr-option-list", OptionList)
         lines = str(option_list.get_option_at_index(0).prompt).splitlines()
         assert len(lines) == 2
-        assert "@alice" in lines[0]
+        assert "awaiting you" in lines[0]
         assert len(lines[1]) < wide_length
         assert lines[1].endswith("…")
 
@@ -355,8 +377,7 @@ def _make_mock_scored_pr_with_wide_metadata(number: int) -> ScoredPullRequest:
         ci_status="SUCCESS",
     )
     score = ScoreBreakdown(
-        tier=TriageTier.T1,
-        affinity_points=30.0,
+        follow_state=FollowUpState.ME_ACTIVE,
         rationale="Author teammate",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -381,8 +402,7 @@ def _make_mock_scored_pr_long_repo(number: int) -> ScoredPullRequest:
         ci_status="SUCCESS",
     )
     score = ScoreBreakdown(
-        tier=TriageTier.T1,
-        affinity_points=24.0,
+        follow_state=FollowUpState.ME_ACTIVE,
         rationale="Author teammate",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -431,7 +451,7 @@ async def test_pr_list_wide_glyphs_stay_two_rows():
         for idx in range(option_list.option_count):
             lines = str(option_list.get_option_at_index(idx).prompt).splitlines()
             assert len(lines) == 2, f"option {idx} wrapped to {len(lines)} rows"
-            assert "@" in lines[0], f"option {idx}: author not on metadata row"
+            assert "awaiting you" in lines[0], f"option {idx}: badge missing from metadata row"
             assert cell_len(lines[0]) <= render_width, f"option {idx}: metadata row exceeds pane"
             assert cell_len(lines[1]) <= render_width, f"option {idx}: title row exceeds pane"
 
@@ -448,7 +468,7 @@ async def test_pr_diff_view_and_inline_comment():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
 
     async with app.run_test() as pilot:
@@ -479,13 +499,53 @@ async def test_pr_diff_view_and_inline_comment():
         assert diff_view.spinner_is_running is False
 
 
+@pytest.mark.asyncio
+async def test_own_threads_render_distinctly_in_diff():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        threads = [
+            ReviewThread(
+                path="auth/jwt.py",
+                line=3,
+                comments=[
+                    ThreadComment(author="octocat", body="I fixed this line"),
+                    ThreadComment(author="alice", body="Looks good"),
+                ],
+            )
+        ]
+        diff_view.load_diff(SAMPLE_DIFF, existing_threads=threads, viewer_login="octocat")
+        diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+        assert diff_viewer.file_diff is not None
+
+        # Find the rendered line that carries the thread target (line 3).
+        rendered = [diff_viewer._render_line(i) for i in range(len(diff_viewer._rendered_lines))]
+        joined = "\n".join(str(t) for t in rendered)
+        assert "You: I fixed this line" in joined
+        assert "alice: Looks good" in joined
+        assert "You:" in joined.replace("alice: Looks good", "")
+
+        # Unknown viewer falls back to author-labeled rendering.
+        diff_viewer.viewer_login = None
+        diff_viewer.set_file_diff(
+            diff_viewer.file_diff, existing_threads=threads, draft_comments=None
+        )
+        rendered = "\n".join(str(diff_viewer._render_line(i)) for i in range(len(diff_viewer._rendered_lines)))
+        assert "octocat: I fixed this line" in rendered
+        assert "You:" not in rendered
+
+
 
 @pytest.mark.asyncio
 async def test_file_list_renders_compact_tree():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -522,7 +582,7 @@ async def test_file_search_navigates_compact_tree():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -604,7 +664,7 @@ async def test_modals_interaction():
     assert review_modal.pending_comments_count == 2
 
 
-def _make_mock_scored_pr_with_title(number: int, tier: TriageTier, title: str) -> ScoredPullRequest:
+def _make_mock_scored_pr_with_title(number: int, follow_state: FollowUpState = FollowUpState.ME_ACTIVE, title: str = "PR") -> ScoredPullRequest:
     pr = PullRequestData(
         id=f"PR_{number}",
         number=number,
@@ -623,8 +683,7 @@ def _make_mock_scored_pr_with_title(number: int, tier: TriageTier, title: str) -
         ci_status="SUCCESS",
     )
     score = ScoreBreakdown(
-        tier=tier,
-        affinity_points=50.0,
+        follow_state=follow_state,
         rationale="Author teammate",
     )
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
@@ -636,9 +695,9 @@ async def test_vim_jk_moves_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T2),
-            _make_mock_scored_pr(101, TriageTier.T0),
-            _make_mock_scored_pr(103, TriageTier.T1),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_OTHERS),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(103, FollowUpState.ME_ACTIVE),
         ],
     )
     async with app.run_test() as pilot:
@@ -666,11 +725,11 @@ async def test_vim_gg_G_jumps_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T3),
-            _make_mock_scored_pr(101, TriageTier.T0),
-            _make_mock_scored_pr(103, TriageTier.T2),
-            _make_mock_scored_pr(104, TriageTier.T1),
-            _make_mock_scored_pr(105, TriageTier.T3),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_AUTHOR),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(103, FollowUpState.WAITING_OTHERS),
+            _make_mock_scored_pr(104, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(105, FollowUpState.WAITING_AUTHOR),
         ],
     )
     async with app.run_test() as pilot:
@@ -694,8 +753,8 @@ async def test_vim_h_l_focus_movement():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T1),
-            _make_mock_scored_pr(101, TriageTier.T0),
+            _make_mock_scored_pr(102, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE),
         ],
     )
     async with app.run_test() as pilot:
@@ -731,7 +790,7 @@ async def test_vim_h_l_boundary():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T2),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_OTHERS),
         ],
     )
     async with app.run_test() as pilot:
@@ -760,9 +819,9 @@ async def test_arrow_up_down_moves_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T2),
-            _make_mock_scored_pr(101, TriageTier.T0),
-            _make_mock_scored_pr(103, TriageTier.T1),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_OTHERS),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(103, FollowUpState.ME_ACTIVE),
         ],
     )
     async with app.run_test() as pilot:
@@ -790,8 +849,8 @@ async def test_arrow_left_right_focus_movement():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T1),
-            _make_mock_scored_pr(101, TriageTier.T0),
+            _make_mock_scored_pr(102, FollowUpState.ME_ACTIVE),
+            _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE),
         ],
     )
     async with app.run_test() as pilot:
@@ -827,7 +886,7 @@ async def test_arrow_left_right_boundary():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr(102, TriageTier.T2),
+            _make_mock_scored_pr(102, FollowUpState.WAITING_OTHERS),
         ],
     )
     async with app.run_test() as pilot:
@@ -855,7 +914,7 @@ async def test_arrow_keys_move_cursor_in_modal():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         pr_list = app.query_one("#pr-option-list", OptionList)
@@ -885,9 +944,9 @@ async def test_vim_search_pr_list():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr_with_title(101, TriageTier.T0, "OAuth2 implementation"),
-            _make_mock_scored_pr_with_title(102, TriageTier.T1, "Fix database migration"),
-            _make_mock_scored_pr_with_title(103, TriageTier.T0, "Update OAuth2 docs"),
+            _make_mock_scored_pr_with_title(101, FollowUpState.ME_ACTIVE, "OAuth2 implementation"),
+            _make_mock_scored_pr_with_title(102, FollowUpState.ME_ACTIVE, "Fix database migration"),
+            _make_mock_scored_pr_with_title(103, FollowUpState.ME_ACTIVE, "Update OAuth2 docs"),
         ],
     )
     async with app.run_test() as pilot:
@@ -919,9 +978,9 @@ async def test_vim_search_n_navigate():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr_with_title(101, TriageTier.T0, "Alpha feature"),
-            _make_mock_scored_pr_with_title(102, TriageTier.T1, "Beta release"),
-            _make_mock_scored_pr_with_title(103, TriageTier.T2, "Alpha refactor"),
+            _make_mock_scored_pr_with_title(101, FollowUpState.ME_ACTIVE, "Alpha feature"),
+            _make_mock_scored_pr_with_title(102, FollowUpState.ME_ACTIVE, "Beta release"),
+            _make_mock_scored_pr_with_title(103, FollowUpState.WAITING_OTHERS, "Alpha refactor"),
         ],
     )
     async with app.run_test() as pilot:
@@ -955,8 +1014,8 @@ async def test_vim_escape_clears_search():
         config=Config(),
         client=None,
         scored_prs=[
-            _make_mock_scored_pr_with_title(101, TriageTier.T0, "OAuth2 implementation"),
-            _make_mock_scored_pr_with_title(102, TriageTier.T1, "Fix database migration"),
+            _make_mock_scored_pr_with_title(101, FollowUpState.ME_ACTIVE, "OAuth2 implementation"),
+            _make_mock_scored_pr_with_title(102, FollowUpState.ME_ACTIVE, "Fix database migration"),
         ],
     )
     async with app.run_test() as pilot:
@@ -986,7 +1045,7 @@ async def test_vim_escape_closes_modal():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         app.push_screen(InlineCommentModal("auth/jwt.py", 10))
@@ -1005,7 +1064,7 @@ async def test_vim_keys_do_not_fire_in_modal():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         pr_list = app.query_one("#pr-option-list", OptionList)
@@ -1033,7 +1092,7 @@ async def test_comment_action_opens_modal_and_stores_draft():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1075,7 +1134,7 @@ async def test_saving_comment_preserves_diff_position():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1130,7 +1189,7 @@ async def test_cancelling_comment_preserves_diff_position():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1170,7 +1229,7 @@ async def test_add_pending_comment_updates_only_target_row():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1196,7 +1255,7 @@ async def test_set_file_diff_renders_existing_threads_on_matching_lines():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1239,7 +1298,7 @@ async def test_existing_threads_and_pending_comment_render_distinctly():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1267,7 +1326,7 @@ async def test_hide_whitespace_toggle_key():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1303,7 +1362,7 @@ async def test_hide_whitespace_toggle_keeps_real_changes():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1324,7 +1383,7 @@ async def test_hide_whitespace_noop_without_loaded_diff():
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
@@ -1352,7 +1411,7 @@ async def test_thread_fetch_failure_still_displays_diff():
     app = GitkeeperApp(
         config=Config(),
         client=FakeClient(),
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1402,7 +1461,7 @@ from textual.widgets import Markdown as _Markdown
 
 from gitkeeper.config import Config
 from gitkeeper.github.client import PullRequestData
-from gitkeeper.scoring.calculator import ScoreBreakdown, TriageTier
+from gitkeeper.scoring.calculator import FollowUpState, ScoreBreakdown
 from gitkeeper.scoring.pipeline import ScoredPullRequest
 from gitkeeper.ui.app import GitkeeperApp
 
@@ -1422,7 +1481,7 @@ def _slow_update(self, markdown):
 _Markdown.update = _slow_update
 
 
-def mock_pr(number, tier):
+def mock_pr(number, follow_state):
     pr = PullRequestData(
         id=f"PR_{{number}}", number=number, title=f"PR {{number}}",
         body=BODY, url=f"https://acme/{{number}}",
@@ -1431,7 +1490,7 @@ def mock_pr(number, tier):
         created_at="2026-08-14T10:00:00Z", updated_at="2026-08-15T12:00:00Z",
         additions=45, deletions=10, changed_files_count=2, ci_status="SUCCESS",
     )
-    score = ScoreBreakdown(tier=tier, affinity_points=50.0, rationale="teammate")
+    score = ScoreBreakdown(follow_state=follow_state, rationale="teammate")
     return ScoredPullRequest(pr=pr, is_actionable=True, score=score)
 
 
@@ -1442,7 +1501,7 @@ async def drive(pilot):
     await pilot.press("q")
 
 
-scored_prs = [mock_pr(100 + i, TriageTier(i % 4)) for i in range(10)]
+scored_prs = [mock_pr(100 + i, FollowUpState(i % 3)) for i in range(10)]
 app = GitkeeperApp(config=Config(), client=None, scored_prs=scored_prs)
 app.run(headless=True, size=(90, 30), auto_pilot=drive)
 """,
@@ -1467,7 +1526,7 @@ async def test_overview_renders_last_previewed_pr_body():
         return f"## PR {number}\n\nDistinct body marker {number} unique content"
 
     scored_prs = [
-        _make_mock_scored_pr_with_body(100 + i, TriageTier(i % 4), _body(100 + i))
+        _make_mock_scored_pr_with_body(100 + i, FollowUpState(i % 3), _body(100 + i))
         for i in range(6)
     ]
     app = GitkeeperApp(config=Config(), client=None, scored_prs=scored_prs)
@@ -1499,6 +1558,38 @@ class _OverviewOnlyApp(App):
 
     def on_mount(self) -> None:
         self.overview.update_pr(self._scored_pr)
+
+
+class _OverviewViewerApp(App):
+    def __init__(
+        self,
+        scored_pr: ScoredPullRequest,
+        viewer_login: str,
+        viewer_status: object,
+        own_thread_count: int = 0,
+        draft_count: int = 0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._scored_pr = scored_pr
+        self._viewer_login = viewer_login
+        self._viewer_status = viewer_status
+        self._own_thread_count = own_thread_count
+        self._draft_count = draft_count
+        self.overview: Optional[PROverviewView] = None
+
+    def compose(self) -> ComposeResult:
+        self.overview = PROverviewView(id="pr-overview-view")
+        yield self.overview
+
+    def on_mount(self) -> None:
+        self.overview.update_pr(
+            self._scored_pr,
+            viewer_login=self._viewer_login,
+            viewer_status=self._viewer_status,
+            own_thread_count=self._own_thread_count,
+            draft_count=self._draft_count,
+        )
 
 
 def _render_app_to_text(app: App) -> str:
@@ -1566,6 +1657,60 @@ async def test_pr_overview_placeholder_when_no_selection():
     assert "No pull request selected" in rendered
 
 
+@pytest.mark.asyncio
+async def test_pr_overview_viewer_status_line_approved():
+    from gitkeeper.scoring.calculator import ViewerStatus
+    from datetime import datetime, timedelta, timezone
+
+    scored = _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)
+    app = _OverviewViewerApp(
+        scored,
+        viewer_login="octocat",
+        viewer_status=ViewerStatus(
+            has_reviewed=True,
+            verdict="APPROVED",
+            verdict_at=datetime.now(timezone.utc) - timedelta(days=2),
+        ),
+        draft_count=1,
+    )
+    async with app.run_test(size=(44, 30)) as pilot:
+        await pilot.pause()
+        rendered = _render_app_to_text(app)
+
+    assert "approved" in rendered and "2d ago" in rendered
+    assert "1 draft pending" in rendered
+
+
+@pytest.mark.asyncio
+async def test_pr_overview_viewer_status_line_not_reviewed():
+    from gitkeeper.scoring.calculator import ViewerStatus
+
+    scored = _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)
+    app = _OverviewViewerApp(
+        scored,
+        viewer_login="octocat",
+        viewer_status=ViewerStatus(),
+        own_thread_count=3,
+    )
+    async with app.run_test(size=(44, 30)) as pilot:
+        await pilot.pause()
+        rendered = _render_app_to_text(app)
+
+    assert "not yet reviewed" in rendered
+    assert "3 inline comments" in rendered
+
+
+@pytest.mark.asyncio
+async def test_pr_overview_no_viewer_status_row_when_login_unknown():
+    scored = _make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)
+    app = _OverviewOnlyApp(scored)
+    async with app.run_test(size=(44, 30)) as pilot:
+        await pilot.pause()
+        rendered = _render_app_to_text(app)
+
+    assert "You:" not in rendered
+
+
 def _patch_open_url(monkeypatch):
     opened = []
     monkeypatch.setattr(
@@ -1586,7 +1731,7 @@ async def test_open_browser_key_opens_selected_pr(monkeypatch):
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         option_list = app.query_one("#pr-option-list", OptionList)
@@ -1606,7 +1751,7 @@ async def test_open_browser_no_url_reports(monkeypatch):
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1639,7 +1784,7 @@ async def test_open_browser_noop_when_modal_open(monkeypatch):
     app = GitkeeperApp(
         config=Config(),
         client=None,
-        scored_prs=[_make_mock_scored_pr(101, TriageTier.T0)],
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
         await pilot.pause()

@@ -8,15 +8,13 @@ from textual.widget import Widget
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
-from gitkeeper.scoring.calculator import FollowUpState, TriageTier
-from gitkeeper.scoring.pipeline import ScoredPullRequest, queue_sort_key
+from gitkeeper.scoring.calculator import FollowUpState
+from gitkeeper.scoring.pipeline import ScoredPullRequest, activity_sort_key
 
-
-TIER_LABELS = {
-    TriageTier.T0: ("T0", "bold red"),
-    TriageTier.T1: ("T1", "bold yellow"),
-    TriageTier.T2: ("T2", "white"),
-    TriageTier.T3: ("T3", "bright_black"),
+ACTION_BADGES = {
+    FollowUpState.ME_ACTIVE: ("awaiting you", "bold cyan"),
+    FollowUpState.WAITING_AUTHOR: ("wait: author", "bright_black"),
+    FollowUpState.WAITING_OTHERS: ("wait: others", "bright_black"),
 }
 
 # Nominal usable width for a single #pr-option-list row. The pane is 42 cols;
@@ -76,11 +74,6 @@ def _effective_row_width(option_list: OptionList, screen_width: Optional[int] = 
         return ROW_WIDTH
 
 
-def _tier_style(tier: TriageTier) -> tuple[str, str]:
-    label, style = TIER_LABELS.get(tier, TIER_LABELS[TriageTier.T3])
-    return label, style
-
-
 def _pr_number_text(number: int, url: Optional[str]) -> Text:
     """Build the PR number span, hyperlinking to the PR URL when available."""
     if url:
@@ -106,7 +99,7 @@ class _QueueOptionList(OptionList):
 
 
 class PRListView(Widget):
-    """Ranked PR list widget displaying actionable PRs sorted by relevance score."""
+    """Activity-ordered PR list widget with per-row action badges."""
 
     DEFAULT_CSS = """
     PRListView {
@@ -129,13 +122,11 @@ class PRListView(Widget):
         super().__init__(**kwargs)
         self.all_scored_prs: List[ScoredPullRequest] = []
         self.ordered_prs: List[ScoredPullRequest] = []
-        self.waiting_prs: List[ScoredPullRequest] = []
-        self._band_start: Optional[int] = None  # option index of the band separator
         self._row_width: Optional[int] = None
 
     @property
     def active_prs(self) -> List[ScoredPullRequest]:
-        """Backward-compatible alias for the displayed, ordered PR list."""
+        """Ordered, displayed PR list (flat, action-badged)."""
         return self.ordered_prs
 
     def compose(self) -> ComposeResult:
@@ -148,11 +139,8 @@ class PRListView(Widget):
     ) -> None:
         self.all_scored_prs = scored_prs
         actionable_prs = [p for p in scored_prs if p.is_actionable]
-        # Sort actionable PRs by the shared pipeline key (band, tier, heat...)
-        self.ordered_prs = sorted(actionable_prs, key=queue_sort_key)
-        self.waiting_prs = [
-            p for p in self.ordered_prs if p.score.follow_state != FollowUpState.ME_ACTIVE
-        ]
+        # Sort actionable PRs by the shared recency key.
+        self.ordered_prs = sorted(actionable_prs, key=activity_sort_key)
 
         option_list = self.query_one("#pr-option-list", OptionList)
         option_list.clear_options()
@@ -163,7 +151,7 @@ class PRListView(Widget):
             for idx, p in enumerate(self.ordered_prs):
                 key = f"{p.pr.repo_name_with_owner}#{p.pr.number}"
                 if key == preserve_pr_key:
-                    option_list.highlighted = self._option_index(idx)
+                    option_list.highlighted = idx
                     self.post_message(self.PRSelected(p))
                     return
 
@@ -171,25 +159,6 @@ class PRListView(Widget):
         if self.ordered_prs:
             option_list.highlighted = 0
             self.post_message(self.PRSelected(self.ordered_prs[0]))
-
-    def _pr_index(self, option_index: Optional[int]) -> Optional[int]:
-        """Map an OptionList index (which includes the band separator) to a PR."""
-        if option_index is None:
-            return None
-        band = self._band_start
-        if band is not None:
-            if option_index == band:
-                return None  # the separator row itself
-            if option_index > band:
-                return option_index - 1
-        return option_index
-
-    def _option_index(self, pr_index: int) -> int:
-        """Inverse of _pr_index: a PR position to its OptionList index."""
-        band = self._band_start
-        if band is not None and pr_index >= band:
-            return pr_index + 1
-        return pr_index
 
     def _populate_list(
         self,
@@ -200,68 +169,40 @@ class PRListView(Widget):
         if row_width is None:
             row_width = _effective_row_width(option_list)
 
-        band_start = next(
-            (
-                i
-                for i, item in enumerate(prs)
-                if item.score.follow_state != FollowUpState.ME_ACTIVE
-            ),
-            None,
-        )
-        self._band_start = band_start
-
         for idx, item in enumerate(prs):
-            if band_start is not None and idx == band_start:
-                separator = Text("─" * max(row_width - 2, 1), style="dim")
-                option_list.add_option(
-                    Option(separator, id="wait-band-separator", disabled=True)
-                )
+            badge_text, badge_style = ACTION_BADGES.get(
+                item.score.follow_state, ("wait", "bright_black")
+            )
+            badge = f"[{badge_text}] "
+            number = _pr_number_text(item.pr.number, item.pr.url)
+            number_width = cell_len(str(number))
 
-            is_active = item.score.follow_state == FollowUpState.ME_ACTIVE
-            number = f"#{item.pr.number} "
-
-            if is_active:
-                label, style = _tier_style(item.score.tier)
-                badge = f"[{label}] "
-                stale = f"[{item.score.stale_days}d] " if item.score.stale_days is not None else ""
+            metadata_row = Text()
+            metadata_row.append(badge, style=f"bold {badge_style}")
+            metadata_row.append_text(number)
+            remaining = row_width - cell_len(badge) - number_width
+            if remaining > 1:
                 author = f"  @{item.pr.author}"
-                meta_budget = (
-                    row_width - cell_len(badge) - cell_len(stale) - cell_len(number)
+                author_width = cell_len(author)
+                repo_budget = max(remaining - author_width, 1)
+                repo = _truncate(item.pr.repo_name_with_owner.split("/")[-1], repo_budget)
+                repo_width = cell_len(repo)
+                if repo_width + author_width > remaining:
+                    repo = _truncate(item.pr.repo_name_with_owner.split("/")[-1], max(remaining - 1, 1))
+                author = _truncate(author, max(remaining - cell_len(repo), 1))
+                metadata_row.append(
+                    repo,
+                    style="magenta" if item.score.follow_state == FollowUpState.ME_ACTIVE else "dark_cyan",
                 )
-                if cell_len(author) >= meta_budget:
-                    author = _truncate(author, meta_budget)
-                    repo = ""
-                else:
-                    repo = _truncate(
-                        item.pr.repo_name_with_owner.split("/")[-1],
-                        meta_budget - cell_len(author),
-                    )
+                metadata_row.append(author, style="dim")
 
-                text = Text()
-                text.append(badge, style=f"bold {style}")
-                if stale:
-                    text.append(stale, style="bold red")
-                text.append_text(_pr_number_text(item.pr.number, item.pr.url))
-                text.append(repo, style="magenta")
-                text.append(author, style="dim")
-            else:
-                wait_label = item.score.waiting_label or "waiting"
-                number_width = cell_len(number)
-                reason_budget = max(row_width - number_width, 1)
-                reason = _truncate(wait_label, reason_budget)
-                repo = _truncate(
-                    item.pr.repo_name_with_owner.split("/")[-1],
-                    max(row_width - number_width - cell_len(reason), 1),
-                )
-                text = Text()
-                text.append(number, style="bright_black")
-                text.append(repo, style="dark_cyan")
-                text.append(f" ({reason})", style="italic dim")
+            text = Text()
+            text.append(metadata_row)
 
             text.append("\n")
             text.append(
                 _truncate(item.pr.title, row_width),
-                style="white" if is_active else "bright_black",
+                style="white" if item.score.follow_state == FollowUpState.ME_ACTIVE else "bright_black",
             )
 
             option_list.add_option(Option(text, id=f"pr_{item.pr.number}_{idx}"))
@@ -295,20 +236,18 @@ class PRListView(Widget):
         highlighted = option_list.highlighted
         option_list.clear_options()
         self._populate_list(option_list, self.ordered_prs, row_width)
-        separator_count = 1 if self._band_start is not None else 0
-        if highlighted is not None and highlighted < len(self.ordered_prs) + separator_count:
+        if highlighted is not None and highlighted < len(self.ordered_prs):
             option_list.highlighted = highlighted
 
     def _handle_option_selection(self, option_index: Optional[int]) -> None:
         if option_index is None:
             return
-        pr_index = self._pr_index(option_index)
-        if pr_index is None or pr_index >= len(self.ordered_prs):
+        if option_index >= len(self.ordered_prs):
             return
         option_list = self.query_one("#pr-option-list", OptionList)
         if option_list.highlighted != option_index:
             option_list.highlighted = option_index
-        self.post_message(self.PRSelected(self.ordered_prs[pr_index]))
+        self.post_message(self.PRSelected(self.ordered_prs[option_index]))
 
     @on(OptionList.OptionHighlighted)
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
@@ -322,7 +261,7 @@ class PRListView(Widget):
 
     def get_selected_pr(self) -> Optional[ScoredPullRequest]:
         option_list = self.query_one("#pr-option-list", OptionList)
-        pr_index = self._pr_index(option_list.highlighted)
+        pr_index = option_list.highlighted
         if pr_index is None or pr_index >= len(self.ordered_prs):
             return None
         return self.ordered_prs[pr_index]

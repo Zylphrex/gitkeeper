@@ -9,21 +9,13 @@ from textual.widget import Widget
 from textual.widgets import Label, Markdown
 
 from gitkeeper.github.client import ReviewRecord, ReviewerRequest
-from gitkeeper.scoring.calculator import TriageTier
+from gitkeeper.scoring.calculator import FollowUpState, ViewerStatus
 from gitkeeper.scoring.pipeline import ScoredPullRequest
 
-TIER_TITLES = {
-    TriageTier.T0: "T0 — you're the merge blocker",
-    TriageTier.T1: "T1 — someone is waiting on you",
-    TriageTier.T2: "T2 — the team's, but it's your code",
-    TriageTier.T3: "T3 — anything goes",
-}
-
-TIER_COLORS = {
-    TriageTier.T0: "bold red",
-    TriageTier.T1: "bold yellow",
-    TriageTier.T2: "white",
-    TriageTier.T3: "bright_black",
+ACTION_STATE_LINES = {
+    FollowUpState.ME_ACTIVE: ("Awaiting your action", "bold cyan"),
+    FollowUpState.WAITING_AUTHOR: ("Waiting on author", "yellow"),
+    FollowUpState.WAITING_OTHERS: ("Waiting on others", "bright_black"),
 }
 
 MARKDOWN_DEBOUNCE_MS = 0.12
@@ -111,6 +103,45 @@ def _reviews_row(reviews: List[ReviewRecord]) -> Optional[str]:
     return f"Reviews: [dim]{' · '.join(parts)}[/dim]"
 
 
+def _viewer_status_row(
+    viewer_login: Optional[str],
+    status: Optional[ViewerStatus],
+    own_thread_count: int = 0,
+    draft_count: int = 0,
+) -> Optional[str]:
+    """Render the viewer-action status line for the overview metadata.
+
+    Returns None when the viewer is unknown so the row vanishes entirely.
+    Conveys the viewer's own verdict (or absence), a re-review due state,
+    any viewer-authored inline comment count, and pending draft count.
+    """
+    if not viewer_login:
+        return None
+    actions = []
+    if status is not None and status.has_reviewed:
+        if status.verdict == "APPROVED":
+            actions.append("approved")
+        elif status.verdict == "CHANGES_REQUESTED":
+            actions.append("requested changes")
+        else:
+            actions.append("commented")
+        if status.verdict_at is not None:
+            rel = _relative_time(status.verdict_at.isoformat().replace("+00:00", "Z"))
+            if rel is not None:
+                actions.append(rel)
+        if status.re_review_due:
+            actions.append("new pushes since review")
+    else:
+        actions.append("not yet reviewed")
+    if own_thread_count:
+        s = "" if own_thread_count == 1 else "s"
+        actions.append(f"{own_thread_count} inline comment{s}")
+    if draft_count:
+        s = "" if draft_count == 1 else "s"
+        actions.append(f"{draft_count} draft{s} pending")
+    return f"You: [dim]{' · '.join(actions)}[/dim]"
+
+
 class PROverviewView(Widget):
     """Displays metadata, scoring breakdown, and PR body markdown."""
 
@@ -175,6 +206,10 @@ class PROverviewView(Widget):
         self._pending_markdown: Optional[str] = None
         self._debounce_timer = None
         self._markdown_worker = None
+        self.viewer_login: Optional[str] = None
+        self.viewer_status: Optional[ViewerStatus] = None
+        self.own_thread_count: int = 0
+        self.draft_count: int = 0
 
     def compose(self) -> ComposeResult:
         with VerticalGroup(id="pr-meta-box"):
@@ -189,8 +224,19 @@ class PROverviewView(Widget):
         with VerticalScroll(id="pr-body-scroll"):
             yield Markdown("", id="pr-body-markdown")
 
-    def update_pr(self, scored_pr: Optional[ScoredPullRequest]) -> None:
+    def update_pr(
+        self,
+        scored_pr: Optional[ScoredPullRequest],
+        viewer_login: Optional[str] = None,
+        viewer_status: Optional[ViewerStatus] = None,
+        own_thread_count: int = 0,
+        draft_count: int = 0,
+    ) -> None:
         self.scored_pr = scored_pr
+        self.viewer_login = viewer_login
+        self.viewer_status = viewer_status
+        self.own_thread_count = own_thread_count
+        self.draft_count = draft_count
         title_label = self.query_one("#pr-title", Label)
         meta_label = self.query_one("#pr-meta-info", Label)
         rationale_label = self.query_one("#pr-score-rationale", Label)
@@ -211,7 +257,6 @@ class PROverviewView(Widget):
         title_label.update(
             f"{_pr_number_markup(pr.number, pr.url)} {pr.title}{draft_str}"
         )
-
         meta_rows = [
             f"Repo: [magenta]{pr.repo_name_with_owner}[/magenta] · "
             f"Author: [bold cyan]@{pr.author}[/bold cyan]"
@@ -246,16 +291,22 @@ class PROverviewView(Widget):
         if reviews:
             meta_rows.append(reviews)
 
+        viewer_status_row = _viewer_status_row(
+            self.viewer_login,
+            self.viewer_status,
+            self.own_thread_count,
+            self.draft_count,
+        )
+        if viewer_status_row:
+            meta_rows.append(viewer_status_row)
+
         meta_label.update("\n".join(meta_rows))
 
-        score_color = TIER_COLORS.get(score.tier, "white")
-        tier_title = TIER_TITLES.get(score.tier, f"Tier {score.tier.name}")
-        rationale_label.update(
-            f"[{score_color}]{tier_title}[/{score_color}]"
+        state_title, state_color = ACTION_STATE_LINES.get(
+            score.follow_state, ("Awaiting your action", "bold cyan")
         )
-        breakdown_label.update(
-            f"[dim]{score.rationale}[/dim]"
-        )
+        rationale_label.update(f"[{state_color}]{state_title}[/{state_color}]")
+        breakdown_label.update(f"[dim]{score.rationale}[/dim]")
 
         body_content = pr.body if pr.body and pr.body.strip() else "_No description provided._"
         self._schedule_markdown(body_content)

@@ -1,18 +1,17 @@
-import pytest
 from datetime import datetime, timezone, timedelta
 from gitkeeper.config import Config
-from gitkeeper.git.decay import PathTouchScore
+from gitkeeper.git.inspector import PathTouchScore
 from gitkeeper.github.client import PullRequestData, PullRequestFile, ReviewRecord, ReviewerRequest
 from gitkeeper.repos import RepoLocator
 from gitkeeper.scoring.calculator import (
     FollowUpState,
-    TriageTier,
-    assign_triage_tier,
+    ScoreBreakdown,
+    derive_action_reasons,
     derive_followup_state,
-    staleness_anchor_dt,
+    derive_viewer_status,
 )
 from gitkeeper.scoring.gates import is_actionable
-from gitkeeper.scoring.pipeline import RelevancePipeline, ScoredPullRequest, queue_sort_key
+from gitkeeper.scoring.pipeline import RelevancePipeline, ScoredPullRequest, activity_sort_key
 
 
 def make_pr(**overrides) -> PullRequestData:
@@ -81,8 +80,20 @@ def test_reviewed_prs_pass_the_gate_and_are_classified_not_dropped():
     assert derive_followup_state(refreshed, "octocat") == FollowUpState.ME_ACTIVE
 
 
-def test_assign_triage_tier_direct_request():
-    cfg = Config()
+# ---------- action reasons (tier-less) ----------
+
+def _reasons(pr, touch_scores=None):
+    heuristics = Config().heuristics
+    reason_list, rationale = derive_action_reasons(
+        pr=pr,
+        touch_scores=touch_scores or [],
+        current_username="octocat",
+        heuristics=heuristics,
+    )
+    return reason_list, rationale
+
+
+def test_action_reasons_directly_requested():
     pr = make_pr(
         number=1,
         requested_reviewers=[
@@ -90,20 +101,12 @@ def test_assign_triage_tier_direct_request():
             ReviewerRequest(login_or_slug="bob", is_team=False),
         ],
     )
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=[],
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T1
-    assert "directly requested" in breakdown.reasons
-    assert breakdown.rationale
+    reason_list, rationale = _reasons(pr)
+    assert "directly requested" in reason_list
+    assert rationale
 
 
-def test_assign_triage_tier_0_bottleneck():
-    cfg = Config()
+def test_action_reasons_bottleneck_when_last_unverdict():
     pr = make_pr(
         number=2,
         pushed_at="2026-08-15T09:00:00Z",
@@ -113,153 +116,68 @@ def test_assign_triage_tier_0_bottleneck():
         ],
         reviews=[ReviewRecord(author="bob", state="APPROVED", submitted_at="2026-08-14T09:00:00Z")],
     )
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=[],
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T0
-    assert any("bottleneck" in reason for reason in breakdown.reasons)
+    reason_list, _ = _reasons(pr)
+    assert any("bottleneck" in reason for reason in reason_list)
 
 
-def test_assign_triage_tier_0_only_reviewer():
-    cfg = Config()
+def test_action_reasons_bottleneck_only_reviewer():
     pr = make_pr(
         number=3,
         requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
     )
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=[],
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T0
+    reason_list, _ = _reasons(pr)
+    assert any("bottleneck" in reason for reason in reason_list)
 
 
-def test_assign_triage_tier_2_team_affinity():
-    cfg = Config()
+def test_action_reasons_touched_files_chip():
     pr = make_pr(
         number=4,
         requested_reviewers=[ReviewerRequest(login_or_slug="core-team", is_team=True)],
         files=[PullRequestFile(path="auth.py", additions=20, deletions=5, change_type="MODIFIED")],
     )
     touch_scores = [PathTouchScore(path="auth.py", touches_recent_90d=2)]
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=touch_scores,
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T2
-    assert "touched 1/1 files" in breakdown.reasons
+    reason_list, _ = _reasons(pr, touch_scores)
+    assert "touched 1/1 files" in reason_list
 
 
-def test_assign_triage_tier_3_fallback():
-    cfg = Config()
+def test_action_reasons_respond_to_review_when_authored():
     pr = make_pr(
-        number=5,
-        requested_reviewers=[ReviewerRequest(login_or_slug="unknown-team", is_team=True)],
+        number=21,
+        author="octocat",
+        pushed_at="2026-08-01T10:00:00Z",
+        reviews=[ReviewRecord(author="alice", state="CHANGES_REQUESTED", submitted_at="2026-08-09T10:00:00Z")],
     )
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=[],
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T3
+    reason_list, _ = _reasons(pr)
+    assert "respond to review" in reason_list
 
 
-def test_assign_triage_tier_hot_team_broadcast():
-    cfg = Config()
-    cfg.heuristics.hot_window_hours = 6
-    now = datetime.now(timezone.utc)
-    hot_pushed = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def test_action_reasons_no_respond_when_no_fresh_verdict():
+    pr = make_pr(
+        number=22,
+        author="octocat",
+        pushed_at="2026-08-12T10:00:00Z",
+        reviews=[ReviewRecord(author="alice", state="APPROVED", submitted_at="2026-08-09T10:00:00Z")],
+    )
+    reason_list, _ = _reasons(pr)
+    assert "respond to review" not in reason_list
+
+
+def test_action_reasons_no_hot_reason_without_heat_window():
+    # Heat/team-affinity tiers are gone: a team broadcast with no touched files
+    # yields no reason chips beyond the fallback.
     pr = make_pr(
         number=6,
-        pushed_at=hot_pushed,
+        pushed_at=(datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         requested_reviewers=[ReviewerRequest(login_or_slug="core-team", is_team=True)],
     )
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=[],
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T1
-    assert "author pushed recently" in breakdown.reasons
+    reason_list, rationale = _reasons(pr)
+    assert "author pushed recently" not in reason_list
+    assert rationale  # team request fallback rationale
 
-
-def test_assign_triage_tier_not_hot():
-    cfg = Config()
-    cfg.heuristics.hot_window_hours = 6
-    old_pushed = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    pr = make_pr(
-        number=7,
-        pushed_at=old_pushed,
-        requested_reviewers=[ReviewerRequest(login_or_slug="core-team", is_team=True)],
-    )
-    breakdown = assign_triage_tier(
-        pr=pr,
-        touch_scores=[],
-        current_username="octocat",
-        heuristics=cfg.heuristics,
-        has_local_clone=True,
-    )
-    assert breakdown.tier == TriageTier.T3
-
-
-def test_process_sort_actionable_first_then_tier_then_heat():
-    cfg = Config()
-    cfg.github.user = "octocat"
-    cfg.heuristics.hot_window_hours = 6
-    repo_locator = RepoLocator(cfg.repositories)
-
-    non_actionable = make_pr(number=100, is_draft=True)
-    tier0 = make_pr(
-        id="PR_T0",
-        number=1,
-        pushed_at="2026-08-15T09:00:00Z",
-        requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
-    )
-    tier1_hot = make_pr(
-        id="PR_T1",
-        number=2,
-        pushed_at="2026-08-15T12:00:00Z",
-        requested_reviewers=[
-            ReviewerRequest(login_or_slug="octocat", is_team=False),
-            ReviewerRequest(login_or_slug="bob", is_team=False),
-        ],
-    )
-
-    pipeline = RelevancePipeline(cfg, repo_locator)
-    scored = pipeline.process([non_actionable, tier1_hot, tier0])
-
-    assert [p.pr.number for p in scored] == [1, 2, 100]
-    assert [p.score.tier for p in scored if p.is_actionable] == [TriageTier.T0, TriageTier.T1]
-
-
-def test_pipeline_deterministic_tiebreak():
-    cfg = Config()
-    repo_locator = RepoLocator(cfg.repositories)
-
-    same_tier = []
-    for i in range(2):
-        same_tier.append(make_pr(id=f"PR_{i}", number=i, repo_name_with_owner="org/repo"))
-    pipeline = RelevancePipeline(cfg, repo_locator)
-    scored = pipeline.process(same_tier)
-    assert len([r for r in scored if r.is_actionable]) == 2
 
 # ---------- follow-up turn states (relevance-scoring delta) ----------
 
 def test_followup_state_review_due():
-    cfg = Config()
     pr = make_pr(
         number=11,
         author="alice",
@@ -324,166 +242,205 @@ def test_followup_state_ignores_external_verdict_before_author_push():
     assert derive_followup_state(pr, "octocat") == FollowUpState.WAITING_OTHERS
 
 
-# ---------- authored-response tier rule (triage-tiers delta) ----------
+# ---------- viewer action status (tui-review-client delta) ----------
 
-def test_assign_triage_tier_authored_respond_to_review():
+def test_viewer_status_no_reviews():
+    pr = make_pr(number=51)
+    status = derive_viewer_status(pr, "octocat")
+    assert status.has_reviewed is False
+    assert status.verdict is None
+    assert status.verdict_at is None
+    assert status.re_review_due is False
+
+
+def test_viewer_status_approved_verdict():
     pr = make_pr(
-        number=21,
-        author="octocat",
-        pushed_at="2026-08-01T10:00:00Z",
-        reviews=[ReviewRecord(author="alice", state="CHANGES_REQUESTED", submitted_at="2026-08-09T10:00:00Z")],
+        number=52,
+        reviews=[ReviewRecord(author="octocat", state="APPROVED", submitted_at="2026-08-10T10:00:00Z")],
     )
-    breakdown = assign_triage_tier(
-        pr=pr, touch_scores=[], current_username="octocat", heuristics=Config().heuristics
-    )
-    assert breakdown.tier == TriageTier.T1
-    assert "respond to review" in breakdown.reasons
+    status = derive_viewer_status(pr, "octocat")
+    assert status.has_reviewed is True
+    assert status.verdict == "APPROVED"
+    assert status.verdict_at is not None
+    assert status.verdict_at.isoformat().startswith("2026-08-10T10:00:00")
+    assert status.re_review_due is False
 
 
-def test_assign_triage_tier_authored_old_feedback_is_not_t1():
+def test_viewer_status_requested_changes_verdict():
     pr = make_pr(
-        number=22,
-        author="octocat",
+        number=53,
+        reviews=[ReviewRecord(author="octocat", state="CHANGES_REQUESTED", submitted_at="2026-08-09T10:00:00Z")],
+    )
+    status = derive_viewer_status(pr, "octocat")
+    assert status.has_reviewed is True
+    assert status.verdict == "CHANGES_REQUESTED"
+
+
+def test_viewer_status_re_review_due_after_author_push():
+    pr = make_pr(
+        number=54,
+        reviews=[ReviewRecord(author="octocat", state="APPROVED", submitted_at="2026-08-09T10:00:00Z")],
         pushed_at="2026-08-12T10:00:00Z",
-        reviews=[ReviewRecord(author="alice", state="APPROVED", submitted_at="2026-08-09T10:00:00Z")],
     )
-    breakdown = assign_triage_tier(
-        pr=pr, touch_scores=[], current_username="octocat", heuristics=Config().heuristics
-    )
-    assert "respond to review" not in breakdown.reasons
+    status = derive_viewer_status(pr, "octocat")
+    assert status.has_reviewed is True
+    assert status.re_review_due is True
 
 
-def test_assign_triage_tier_authored_respond_does_not_outrank_bottleneck():
+def test_viewer_status_re_review_not_due_without_new_push():
     pr = make_pr(
-        number=23,
-        author="bob",
-        pushed_at="2026-08-01T10:00:00Z",
+        number=55,
+        reviews=[ReviewRecord(author="octocat", state="APPROVED", submitted_at="2026-08-12T10:00:00Z")],
+        pushed_at="2026-08-09T10:00:00Z",
+    )
+    status = derive_viewer_status(pr, "octocat")
+    assert status.re_review_due is False
+
+
+def test_viewer_status_unknown_username_is_none_safe():
+    pr = make_pr(
+        number=56,
+        reviews=[ReviewRecord(author="alice", state="APPROVED", submitted_at="2026-08-10T10:00:00Z")],
+    )
+    status = derive_viewer_status(pr, None)
+    assert status.has_reviewed is False
+    status_missing = derive_viewer_status(pr, "")
+    assert status_missing.has_reviewed is False
+
+
+def test_viewer_status_username_is_case_insensitive():
+    pr = make_pr(
+        number=57,
+        reviews=[ReviewRecord(author="OctoCat", state="APPROVED", submitted_at="2026-08-10T10:00:00Z")],
+    )
+    status = derive_viewer_status(pr, "octocat")
+    assert status.has_reviewed is True
+    assert status.verdict == "APPROVED"
+
+
+# ---------- activity-ordered queue (relevance-scoring delta) ----------
+
+def _scored(number: int, **overrides) -> ScoredPullRequest:
+    pr = make_pr(number=number, **overrides)
+    return ScoredPullRequest(
+        pr=pr,
+        score=ScoreBreakdown(follow_state=FollowUpState.ME_ACTIVE),
+        is_actionable=True,
+    )
+
+
+def test_activity_sort_key_newest_first():
+    old = _scored(1, updated_at="2026-08-01T00:00:00Z")
+    new = _scored(2, updated_at="2026-08-20T00:00:00Z")
+    mid = _scored(3, updated_at="2026-08-10T00:00:00Z")
+    items = sorted([old, new, mid], key=activity_sort_key)
+    assert [i.pr.number for i in items] == [2, 3, 1]
+
+
+def test_activity_sort_key_deterministic_tiebreak():
+    a = _scored(1, repo_name_with_owner="a/one", updated_at="2026-08-10T00:00:00Z")
+    b = _scored(2, repo_name_with_owner="z/two", updated_at="2026-08-10T00:00:00Z")
+    assert activity_sort_key(a)[1:] < activity_sort_key(b)[1:]
+    # same repo: number breaks the tie
+    c = _scored(3, repo_name_with_owner="a/one", updated_at="2026-08-10T00:00:00Z")
+    assert activity_sort_key(a)[:1] == activity_sort_key(c)[:1]
+    assert activity_sort_key(a)[2] < activity_sort_key(c)[2]
+
+
+def test_activity_sort_key_unparseable_sorts_oldest():
+    junk = ScoredPullRequest(
+        pr=make_pr(number=1, updated_at=""),
+        score=ScoreBreakdown(follow_state=FollowUpState.ME_ACTIVE),
+        is_actionable=True,
+    )
+    fresh = ScoredPullRequest(
+        pr=make_pr(number=2, updated_at="2026-08-20T00:00:00Z"),
+        score=ScoreBreakdown(follow_state=FollowUpState.ME_ACTIVE),
+        is_actionable=True,
+    )
+    items = sorted([fresh, junk], key=activity_sort_key)
+    assert [i.pr.number for i in items] == [2, 1]
+
+
+def test_pipeline_orders_actionable_by_activity():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
+
+    non_actionable = make_pr(number=100, is_draft=True)
+    older = make_pr(
+        number=1,
+        updated_at="2026-08-10T00:00:00Z",
+        requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
+    )
+    newer = make_pr(
+        number=2,
+        updated_at="2026-08-20T00:00:00Z",
         requested_reviewers=[
             ReviewerRequest(login_or_slug="octocat", is_team=False),
-            ReviewerRequest(login_or_slug="alice", is_team=False),
+            ReviewerRequest(login_or_slug="bob", is_team=False),
         ],
-        reviews=[ReviewRecord(author="alice", state="APPROVED", submitted_at="2026-08-09T10:00:00Z")],
     )
-    breakdown = assign_triage_tier(
-        pr=pr, touch_scores=[], current_username="octocat", heuristics=Config().heuristics
-    )
-    assert breakdown.tier == TriageTier.T0
+
+    pipeline = RelevancePipeline(cfg, repo_locator)
+    scored = pipeline.process([non_actionable, older, newer])
+
+    actionable = [p for p in scored if p.is_actionable]
+    assert [p.pr.number for p in actionable] == [2, 1]
 
 
-# ---------- staleness marker (relevance-scoring delta) ----------
+def test_pipeline_interleaves_waiting_and_active_by_activity():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
 
-def test_staleness_anchor_uses_created_at_when_request_time_unavailable():
-    from datetime import datetime, timedelta, timezone
-
-    created = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    pr = make_pr(
-        number=31,
-        created_at=created,
+    awaiting_action = make_pr(
+        number=1,
+        author="alice",
+        updated_at="2026-08-05T00:00:00Z",
         requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
     )
-    anchor = staleness_anchor_dt(pr, "octocat", FollowUpState.ME_ACTIVE)
-    assert anchor is not None
-    days = (datetime.now(timezone.utc) - anchor).total_seconds() / 86400.0
-    assert 4.5 < days < 5.5
-
-
-def test_staleness_anchor_falls_back_to_created_at():
-    pr = make_pr(
-        number=32,
-        created_at="2026-08-10T00:00:00Z",
+    waiting_others = make_pr(
+        number=2,
+        author="alice",
+        updated_at="2026-08-20T00:00:00Z",
         requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
+        reviews=[ReviewRecord(author="octocat", state="APPROVED", submitted_at="2026-08-02T00:00:00Z")],
     )
-    anchor = staleness_anchor_dt(pr, "octocat", FollowUpState.ME_ACTIVE)
-    assert anchor is not None
+
+    pipeline = RelevancePipeline(cfg, repo_locator)
+    scored = pipeline.process([awaiting_action, waiting_others])
+    actionable = [p for p in scored if p.is_actionable]
+    # waiting PR with newer activity appears ahead of the older awaiting-action PR
+    assert [p.pr.number for p in actionable] == [2, 1]
+    by_number = {p.pr.number: p for p in actionable}
+    assert by_number[2].score.follow_state == FollowUpState.WAITING_OTHERS
+    assert by_number[1].score.follow_state == FollowUpState.ME_ACTIVE
 
 
-def test_staleness_anchor_none_for_waiting_band():
-    pr = make_pr(
-        number=33,
+def test_pipeline_sets_reasons_and_waiting_labels():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
+
+    active_pr = make_pr(
+        number=1,
+        author="alice",
+        requested_reviewers=[
+            ReviewerRequest(login_or_slug="octocat", is_team=False),
+            ReviewerRequest(login_or_slug="bob", is_team=False),
+        ],
+    )
+    waiting_pr = make_pr(
+        number=2,
+        author="alice",
         requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
         reviews=[ReviewRecord(author="octocat", state="CHANGES_REQUESTED", submitted_at="2026-08-09T10:00:00Z")],
     )
-    assert staleness_anchor_dt(pr, "octocat", FollowUpState.WAITING_AUTHOR) is None
 
-
-def test_pipeline_marks_stale_only_past_threshold():
-    from datetime import datetime, timedelta, timezone
-
-    cfg = Config()
-    cfg.github.user = "octocat"
-    repo_locator = RepoLocator(cfg.repositories)
-
-    old_created = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    fresh_created = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    stale = make_pr(
-        number=34,
-        created_at=old_created,
-        requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
-    )
-    fresh = make_pr(
-        number=35,
-        created_at=fresh_created,
-        requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
-    )
-
-    scored = RelevancePipeline(cfg, repo_locator).process([stale, fresh])
-    by_number = {s.pr.number: s for s in scored}
-    assert by_number[34].score.stale_days is not None
-    assert by_number[35].score.stale_days is None
-
-
-def test_pipeline_honours_staleness_threshold_config():
-    from datetime import datetime, timedelta, timezone
-
-    cfg = Config()
-    cfg.github.user = "octocat"
-    cfg.followup.staleness_warn_after_days = 10
-    repo_locator = RepoLocator(cfg.repositories)
-
-    requested = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    pr = make_pr(
-        number=36,
-        created_at=requested,
-        requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
-    )
-    scored = RelevancePipeline(cfg, repo_locator).process([pr])
-    assert scored[0].score.stale_days is None
-
-
-# ---------- queue ordering (triage-tiers delta) ----------
-
-def _make_active(number: int, **overrides) -> ScoredPullRequest:
-    from gitkeeper.scoring.calculator import ScoreBreakdown
-
-    pr = make_pr(number=number, **overrides)
-    return ScoredPullRequest(pr=pr, score=ScoreBreakdown(tier=TriageTier.T3), is_actionable=True)
-
-
-def test_queue_sort_active_before_waiting_before_dropped():
-    from gitkeeper.scoring.calculator import ScoreBreakdown
-    from gitkeeper.scoring.pipeline import ScoredPullRequest
-
-    active = _make_active(1, requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)])
-    sb_wait = ScoreBreakdown(follow_state=FollowUpState.WAITING_AUTHOR, waiting_label="waiting on author")
-    waiting = ScoredPullRequest(pr=make_pr(number=2), score=sb_wait, is_actionable=True)
-    dropped = ScoredPullRequest(pr=make_pr(number=3, is_draft=True), score=ScoreBreakdown(), is_actionable=False)
-
-    items = [waiting, dropped, active]
-    items.sort(key=queue_sort_key)
-    assert [i.pr.number for i in items] == [1, 2, 3]
-
-
-def test_queue_waiting_orders_oldest_first():
-    from gitkeeper.scoring.calculator import ScoreBreakdown
-    from gitkeeper.scoring.pipeline import ScoredPullRequest
-
-    def waiting(number: int, age: float) -> ScoredPullRequest:
-        sb = ScoreBreakdown(follow_state=FollowUpState.WAITING_AUTHOR, wait_age_hours=age)
-        return ScoredPullRequest(pr=make_pr(number=number), score=sb, is_actionable=True)
-
-    older = waiting(101, 120.0)
-    newer = waiting(102, 24.0)
-    oldest = waiting(103, 720.0)
-
-    items = sorted([newer, older, oldest], key=queue_sort_key)
-    assert [i.pr.number for i in items] == [103, 101, 102]
+    pipeline = RelevancePipeline(cfg, repo_locator)
+    scored = pipeline.process([waiting_pr, active_pr])
+    by_number = {p.pr.number: p for p in scored}
+    assert "directly requested" in by_number[1].score.reasons
+    assert by_number[2].score.follow_state == FollowUpState.WAITING_AUTHOR
+    assert by_number[2].score.waiting_label == "waiting on author"

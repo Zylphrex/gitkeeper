@@ -1,8 +1,4 @@
-## Purpose
-
-Evaluates pull requests against actionability filters, follow-up turn states, and local-git affinity context to decide which requests belong in the review queue.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Actionability Gating
 The system SHALL gate reviewed pull requests by actionability alone — excluding pull requests that are not ready or actionable for anyone (drafts, closed pull requests, and failing-CI pull requests when configured) — and SHALL classify every surviving pull request into exactly one follow-up turn state, keeping recently-active previously-reviewed pull requests classified as re-review items rather than dropping them.
@@ -31,32 +27,7 @@ The system SHALL gate reviewed pull requests by actionability alone — excludin
 - **WHEN** the user's latest review verdict is APPROVED or DISMISSED and no author push has landed since
 - **THEN** the system SHALL classify the pull request as waiting on others
 
-### Requirement: Assign Follow-up Turn State
-The system SHALL classify each pull request into exactly one follow-up turn state — `ME_ACTIVE` (ball on the user), `WAITING_AUTHOR` (ball on the pull request author), or `WAITING_OTHERS` (ball on other reviewers, CI, or merge) — derived from the user's relationship to the pull request, the user's review verdicts, external reviewer verdicts, and the latest author push time, and SHALL NOT discard turn states by a numeric score threshold.
-
-#### Scenario: Review is due on the user
-- **WHEN** the user is a requested reviewer AND has no submitted verdict and no author activity after the pull request became actionable
-- **THEN** the turn state SHALL be `ME_ACTIVE`
-
-#### Scenario: Re-review is due on the user
-- **WHEN** the user has submitted a verdict AND the author has pushed new commits after it
-- **THEN** the turn state SHALL be `ME_ACTIVE` and the pull request SHALL be flagged as a re-review
-
-#### Scenario: User is waiting on the author to respond
-- **WHEN** the user's latest verdict is CHANGES_REQUESTED and the author has not pushed after it
-- **THEN** the turn state SHALL be `WAITING_AUTHOR`
-
-#### Scenario: User's authored pull request has fresh reviewer feedback
-- **WHEN** the user is the author AND an external reviewer has submitted a verdict AFTER the user's latest push
-- **THEN** the turn state SHALL be `ME_ACTIVE` and the pull request SHALL be flagged as a response to review feedback
-
-#### Scenario: User's authored pull request is waiting on reviewers
-- **WHEN** the user is the author AND no external reviewer has submitted a verdict after the user's latest push
-- **THEN** the turn state SHALL be `WAITING_OTHERS`
-
-#### Scenario: User approved and nothing needs the author
-- **WHEN** the user's latest verdict is APPROVED and no author push has landed since
-- **THEN** the turn state SHALL be `WAITING_OTHERS`
+## ADDED Requirements
 
 ### Requirement: Order Queue by Recent Activity
 The system SHALL order all actionable pull requests in a single flat sequence by most recent activity (newest first) using the pull request's last-updated timestamp, with deterministic tie-breaking, and SHALL NOT reorder them by tier, affiliation score, heat window, or wait age.
@@ -85,3 +56,13 @@ The system SHALL compute local git touch context for the files a pull request ch
 #### Scenario: No local clone
 - **WHEN** a pull request's repository has no corresponding local clone on disk
 - **THEN** the system SHALL not fail the score and SHALL omit the touched-files context from the overview
+
+## REMOVED Requirements
+
+### Requirement: Flag Stale Follow-ups
+**Reason**: The staleness marker is removed from the UI and the recency ordering replaces any need to decorate stale rows; stale-follow-up reasoning no longer influences display.
+**Migration**: Remove the staleness marker from the UI and row output; no config replaces it.
+
+### Requirement: Calculate Affinity and Urgency Score
+**Reason**: The composite signal model that fed tier assignment and intra-tier queue ordering is removed with the triage tiers; queue order is now recency-only and affinity survives only as overview context.
+**Migration**: Queue ordering is determined by most-recent activity; the touched-files signal is surfaced only in the overview panel.

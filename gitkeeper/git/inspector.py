@@ -2,7 +2,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 from typing import Dict, List, Optional
-from gitkeeper.git.decay import PathTouchScore
+from dataclasses import dataclass
+
+
+@dataclass
+class PathTouchScore:
+    path: str
+    touches_recent_90d: int = 0
+    touches_90_180d: int = 0
+    touches_older: int = 0
+    latest_touch_timestamp: Optional[int] = None
+
+    @property
+    def total_touches(self) -> int:
+        return self.touches_recent_90d + self.touches_90_180d + self.touches_older
 
 
 def inspect_path_touches(
@@ -12,7 +25,7 @@ def inspect_path_touches(
     lookback_days: int = 180,
 ) -> Dict[str, PathTouchScore]:
     """
-    Inspect local git log for given file paths, counting commits by matching authors within lookback window.
+    Inspect local git log for given file paths, counting commits by authors within a lookback window.
     """
     results: Dict[str, PathTouchScore] = {p: PathTouchScore(path=p) for p in paths}
     if not repo_dir.is_dir() or not (repo_dir / ".git").exists() or not paths or not author_identifiers:
@@ -22,10 +35,9 @@ def inspect_path_touches(
     cutoff_90d = now_ts - (90 * 86400)
     cutoff_180d = now_ts - (lookback_days * 86400)
 
-    # Format: %ct = committer date timestamp, %H = commit hash, %an = author name, %ae = author email
-    # Query git log for each path or all paths
+    # Format: %ct = committer date timestamp, %H = commit hash, %an = author name,
+    # %ae = author email. Query git log per path.
     for path in paths:
-        # Check if file existed/exists in git
         cmd = [
             "git",
             "-C",

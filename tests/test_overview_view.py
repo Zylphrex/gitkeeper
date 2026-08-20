@@ -1,12 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from gitkeeper.github.client import ReviewRecord, ReviewerRequest
+from gitkeeper.scoring.calculator import ViewerStatus
 from gitkeeper.ui.overview_view import (
     _ci_color,
     _pr_number_markup,
     _relative_time,
     _reviewer_row,
     _reviews_row,
+    _viewer_status_row,
 )
 
 
@@ -74,3 +76,62 @@ def test_reviews_row_summarizes_by_state():
         ReviewRecord("lea", "CHANGES_REQUESTED", None),
     ]
     assert _reviews_row(reviews) == "Reviews: [dim]2 ✓ · 1 ✗[/dim]"
+
+
+# ---------- viewer-action status line (tui-review-client delta) ----------
+
+def _status(has_reviewed=False, verdict=None, verdict_at=None, re_review_due=False):
+    return ViewerStatus(
+        has_reviewed=has_reviewed,
+        verdict=verdict,
+        verdict_at=verdict_at,
+        re_review_due=re_review_due,
+    )
+
+
+def test_viewer_status_row_hidden_when_login_unknown():
+    assert _viewer_status_row(None, _status()) is None
+    assert _viewer_status_row("", _status()) is None
+
+
+def test_viewer_status_row_not_reviewed():
+    row = _viewer_status_row("octocat", _status())
+    assert "not yet reviewed" in row
+
+
+def _days_ago(days: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def test_viewer_status_row_approved():
+    row = _viewer_status_row("octocat", _status(True, "APPROVED", _days_ago(2)))
+    assert "approved" in row and "2d ago" in row
+
+
+def test_viewer_status_row_requested_changes():
+    row = _viewer_status_row("octocat", _status(True, "CHANGES_REQUESTED", _days_ago(2)))
+    assert "requested changes" in row and "2d ago" in row
+
+
+def test_viewer_status_row_commented_without_verdict():
+    at = datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)
+    row = _viewer_status_row("octocat", _status(True, None, at))
+    assert row is not None
+    assert "commented" in row or "not yet reviewed" in row
+
+
+def test_viewer_status_row_re_review_due_indicator():
+    at = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+    row = _viewer_status_row("octocat", _status(True, "APPROVED", at, re_review_due=True))
+    assert "approved" in row
+    assert "new pushes since review" in row
+
+
+def test_viewer_status_row_inline_thread_count():
+    row = _viewer_status_row("octocat", _status(), own_thread_count=3)
+    assert "3 inline comments" in row
+
+
+def test_viewer_status_row_draft_count():
+    row = _viewer_status_row("octocat", _status(), draft_count=2)
+    assert "2 drafts pending" in row

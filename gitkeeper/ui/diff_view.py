@@ -71,6 +71,7 @@ class DiffViewer(Widget):
         self._loading_header_text: Optional[str] = None
         self._loading_option_text: str = ""
         self.hide_whitespace: bool = False
+        self.viewer_login: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         yield Label("No file selected", id="diff-header")
@@ -120,8 +121,10 @@ class DiffViewer(Widget):
         file_diff: Optional[FileDiff],
         existing_threads: Optional[List[ReviewThread]] = None,
         draft_comments: Optional[List[DraftReviewComment]] = None,
+        viewer_login: Optional[str] = None,
     ) -> None:
         self.file_diff = file_diff
+        self.viewer_login = viewer_login
         self._loading_header_text = None
         header = self.query_one("#diff-header", Label)
         options = self.query_one("#diff-options", OptionList)
@@ -189,7 +192,10 @@ class DiffViewer(Widget):
         target_line = _line_target_no(line)
         if target_line and target_line in self.existing_by_line:
             for tc in self.existing_by_line[target_line]:
-                rich_text.append(f"\n      💬 {tc.author}: {tc.body}", style="bold blue on #002244")
+                if self.viewer_login and tc.author.lower() == self.viewer_login.lower():
+                    rich_text.append(f"\n      💬 You: {tc.body}", style="bold green on #002244")
+                else:
+                    rich_text.append(f"\n      💬 {tc.author}: {tc.body}", style="bold blue on #002244")
         if target_line and target_line in self.comments_by_line:
             for c_body in self.comments_by_line[target_line]:
                 rich_text.append(f"\n      💬 Pending Comment: {c_body}", style="bold yellow on #332200")
@@ -278,6 +284,7 @@ class PRDiffView(Widget, SpinnerMixin):
         self.draft_comments: List[DraftReviewComment] = []
         self.existing_threads: List[ReviewThread] = []
         self._file_indices: List[Optional[int]] = []
+        self.viewer_login: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="diff-container"):
@@ -332,11 +339,13 @@ class PRDiffView(Widget, SpinnerMixin):
         diff_text: str,
         existing_threads: Optional[List[ReviewThread]] = None,
         draft_comments: Optional[List[DraftReviewComment]] = None,
+viewer_login: Optional[str] = None,
     ) -> None:
         self._spinner_stop()
         self._parsed_diffs = UnifiedDiffParser.parse(diff_text)
         self.existing_threads = existing_threads or []
         self.draft_comments = draft_comments or []
+        self.viewer_login = viewer_login
         self.refresh_hide_whitespace()
 
     def refresh_hide_whitespace(self) -> None:
@@ -361,7 +370,7 @@ class PRDiffView(Widget, SpinnerMixin):
 
         if not self.file_diffs:
             file_list.add_option(Option("No changed files", disabled=True))
-            diff_viewer.set_file_diff(None, self.existing_threads, self.draft_comments)
+            diff_viewer.set_file_diff(None, self.existing_threads, self.draft_comments, self.viewer_login)
             return
 
         for row in build_file_tree(self.file_diffs):
@@ -381,7 +390,9 @@ class PRDiffView(Widget, SpinnerMixin):
             None,
         )
         selected_file = self.file_diffs[self._file_indices[first_leaf]] if first_leaf is not None else None
-        diff_viewer.set_file_diff(selected_file, self.existing_threads, self.draft_comments)
+        diff_viewer.set_file_diff(
+            selected_file, self.existing_threads, self.draft_comments, self.viewer_login
+        )
         if first_leaf is not None:
             file_list.highlighted = first_leaf
 
@@ -394,7 +405,9 @@ class PRDiffView(Widget, SpinnerMixin):
                     selected_file = self.file_diffs[file_index]
                     diff_viewer = self.query_one("#diff-viewer", DiffViewer)
                     diff_viewer.hide_whitespace = self.hide_whitespace
-                    diff_viewer.set_file_diff(selected_file, self.existing_threads, self.draft_comments)
+                    diff_viewer.set_file_diff(
+                        selected_file, self.existing_threads, self.draft_comments, self.viewer_login
+                    )
 
     def highlight_file(self, file_index: int) -> None:
         """Highlight the list row for *file_index*, skipping directory headers."""
