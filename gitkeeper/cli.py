@@ -45,6 +45,7 @@ class BrandedTyperGroup(TyperGroup):
 
 
 app = typer.Typer(
+    add_completion=False,
     cls=BrandedTyperGroup,
     help="Cuts through GitHub notification noise to find the PRs you're the right person to review.",
     invoke_without_command=True,

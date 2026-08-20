@@ -52,3 +52,13 @@ def test_cli_help_with_config_does_not_launch_tui(monkeypatch):
     assert result.exit_code == 0
     assert PLAIN_BANNER.splitlines()[0].strip() in result.output
     assert len(called_run) == 0
+
+
+def test_cli_help_omits_completion_options(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "--config" in result.output
+    assert "--help" in result.output
+    assert "--install-completion" not in result.output
+    assert "--show-completion" not in result.output
