@@ -23,6 +23,8 @@ ZONE_PR_LIST = "pr-list"
 ZONE_RIGHT_PRIMARY = "right-primary"
 ZONE_RIGHT_SECONDARY = "right-secondary"
 
+ZONE_SCOPED_ACTIONS = frozenset({"comment_action", "submit_review", "hide_whitespace"})
+
 WIDGET_TO_ZONE = {
     "pr-option-list": ZONE_PR_LIST,
     "file-option-list": ZONE_RIGHT_PRIMARY,
@@ -367,6 +369,22 @@ class GitkeeperApp(App):
         except Exception:
             pass
         return None
+
+    def check_action(self, action: str, parameters: tuple) -> bool:
+        """Hide zone-scoped review actions until focus enters the diff pane.
+
+        The comment (`c`), submit-review (`s`), and hide-whitespace (`w`)
+        actions only make sense while the reviewer is inspecting the changed
+        files or diff. Returning ``False`` removes them from the footer and
+        makes the keypress a no-op everywhere else (such as the PR list,
+        unfocused states, or while a modal dialog is open).
+        """
+        action_name = action.rsplit(".", 1)[-1]
+        if action_name in ZONE_SCOPED_ACTIONS:
+            zone = self._current_zone()
+            if zone not in (ZONE_RIGHT_PRIMARY, ZONE_RIGHT_SECONDARY):
+                return False
+        return super().check_action(action, parameters)
 
     def _widget_for_zone(self, zone: str) -> Optional[str]:
         if zone == ZONE_PR_LIST:

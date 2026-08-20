@@ -1335,6 +1335,8 @@ async def test_hide_whitespace_toggle_key():
         diff_viewer = app.query_one("#diff-viewer", DiffViewer)
         header = diff_viewer.query_one("#diff-header", Label)
         options = app.query_one("#diff-options", OptionList)
+        options.focus()
+        await pilot.pause()
 
         # Before toggling: the whitespace-only hunk is visible as -/+
         # Before toggling: the whitespace-only hunk is visible as -/+
@@ -1359,6 +1361,148 @@ async def test_hide_whitespace_toggle_key():
 
 
 @pytest.mark.asyncio
+async def test_zone_scoped_keys_hidden_in_pr_list_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option_list.focus()
+        await pilot.pause()
+
+        active = app.screen.active_bindings
+        assert {"q", "r", "o"} <= set(active)
+        assert "c" not in active
+        assert "s" not in active
+        assert "w" not in active
+
+
+@pytest.mark.asyncio
+async def test_review_scoped_keys_available_in_diff_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        await pilot.pause()
+
+        active = app.screen.active_bindings
+        assert {"q", "r", "c", "s", "o", "w"} <= set(active)
+
+
+@pytest.mark.asyncio
+async def test_review_scoped_keys_available_in_file_list_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        file_list = app.query_one("#file-option-list", OptionList)
+        file_list.focus()
+        await pilot.pause()
+
+        active = app.screen.active_bindings
+        assert {"q", "r", "c", "s", "o", "w"} <= set(active)
+
+
+@pytest.mark.asyncio
+async def test_review_scoped_keys_hidden_with_no_focus():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        app.screen.set_focus(None)
+        await pilot.pause()
+
+        active = app.screen.active_bindings
+        assert "c" not in active
+        assert "s" not in active
+        assert "w" not in active
+
+
+@pytest.mark.asyncio
+async def test_review_scoped_keys_hidden_while_modal_open():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        app.push_screen(SubmitReviewModal("PR 101", 0))
+        await pilot.pause()
+
+        active = app.screen.active_bindings
+        assert "c" not in active
+        assert "s" not in active
+        assert "w" not in active
+
+        app.screen.dismiss(None)
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_review_scoped_keys_noop_in_pr_list_zone():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        option_list = app.query_one("#pr-option-list", OptionList)
+        option_list.focus()
+        await pilot.pause()
+
+        status_before = _status_text(app)
+
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        await pilot.press("w")
+        await pilot.pause()
+        assert diff_view.hide_whitespace is False
+        assert _status_text(app) == status_before
+
+        await pilot.press("c")
+        await pilot.pause()
+        assert not isinstance(app.screen, InlineCommentModal)
+
+        await pilot.press("s")
+        await pilot.pause()
+        assert not isinstance(app.screen, SubmitReviewModal)
+
+
+@pytest.mark.asyncio
+async def test_review_scoped_keys_noop_when_unfocused():
+    app = GitkeeperApp(
+        config=Config(),
+        client=None,
+        scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
+    )
+    async with app.run_test() as pilot:
+        app.screen.set_focus(None)
+        await pilot.pause()
+
+        await pilot.press("c")
+        await pilot.pause()
+        assert not isinstance(app.screen, InlineCommentModal)
+
+        await pilot.press("s")
+        await pilot.pause()
+        assert not isinstance(app.screen, SubmitReviewModal)
+
+        await pilot.press("w")
+        await pilot.pause()
+        diff_view = app.query_one("#pr-diff-view", PRDiffView)
+        assert diff_view.hide_whitespace is False
+
+
+@pytest.mark.asyncio
 async def test_hide_whitespace_toggle_keeps_real_changes():
     app = GitkeeperApp(
         config=Config(),
@@ -1369,6 +1513,9 @@ async def test_hide_whitespace_toggle_keeps_real_changes():
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         diff_view.load_diff(WS_INTERLEAVED_DIFF)
         diff_viewer = app.query_one("#diff-viewer", DiffViewer)
+        diff_options = app.query_one("#diff-options", OptionList)
+        diff_options.focus()
+        await pilot.pause()
 
         await pilot.press("w")
         await pilot.pause()
@@ -1387,6 +1534,10 @@ async def test_hide_whitespace_noop_without_loaded_diff():
         scored_prs=[_make_mock_scored_pr(101, FollowUpState.ME_ACTIVE)],
     )
     async with app.run_test() as pilot:
+        file_list = app.query_one("#file-option-list", OptionList)
+        file_list.focus()
+        await pilot.pause()
+
         diff_view = app.query_one("#pr-diff-view", PRDiffView)
         await pilot.press("w")
         await pilot.pause()
