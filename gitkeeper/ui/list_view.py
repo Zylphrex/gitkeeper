@@ -12,9 +12,9 @@ from gitkeeper.scoring.calculator import FollowUpState
 from gitkeeper.scoring.pipeline import ScoredPullRequest, activity_sort_key
 
 ACTION_BADGES = {
-    FollowUpState.ME_ACTIVE: ("awaiting you", "bold cyan"),
-    FollowUpState.WAITING_AUTHOR: ("wait: author", "bright_black"),
-    FollowUpState.WAITING_OTHERS: ("wait: others", "bright_black"),
+    FollowUpState.ME_ACTIVE: ("● ", "bold cyan"),
+    FollowUpState.WAITING_AUTHOR: ("◇ ", "bright_black"),
+    FollowUpState.WAITING_OTHERS: ("○ ", "bright_black"),
 }
 
 # Nominal usable width for a single #pr-option-list row. The pane is 42 cols;
@@ -171,9 +171,9 @@ class PRListView(Widget):
 
         for idx, item in enumerate(prs):
             badge_text, badge_style = ACTION_BADGES.get(
-                item.score.follow_state, ("wait", "bright_black")
+                item.score.follow_state, ("○ ", "bright_black")
             )
-            badge = f"[{badge_text}] "
+            badge = badge_text
             number = _pr_number_text(item.pr.number, item.pr.url)
             number_width = cell_len(str(number))
 
@@ -183,13 +183,18 @@ class PRListView(Widget):
             remaining = row_width - cell_len(badge) - number_width
             if remaining > 1:
                 author = f"  @{item.pr.author}"
+                repo = item.pr.repo_name_with_owner.split("/")[-1]
+                # Author-priority allocation: reserve the author's full width
+                # first, then give the repository whatever is left. The author
+                # is only shortened once the repository name is fully gone.
                 author_width = cell_len(author)
-                repo_budget = max(remaining - author_width, 1)
-                repo = _truncate(item.pr.repo_name_with_owner.split("/")[-1], repo_budget)
-                repo_width = cell_len(repo)
-                if repo_width + author_width > remaining:
-                    repo = _truncate(item.pr.repo_name_with_owner.split("/")[-1], max(remaining - 1, 1))
-                author = _truncate(author, max(remaining - cell_len(repo), 1))
+                repo_budget = remaining - author_width
+                if repo_budget >= 1:
+                    repo = _truncate(repo, repo_budget)
+                    author = _truncate(author, remaining - cell_len(repo))
+                else:
+                    repo = ""
+                    author = _truncate(author, remaining)
                 metadata_row.append(
                     repo,
                     style="magenta" if item.score.follow_state == FollowUpState.ME_ACTIVE else "dark_cyan",

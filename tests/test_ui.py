@@ -270,9 +270,9 @@ async def test_pr_list_action_badges():
             str(option_list.get_option_at_index(i).prompt)
             for i in range(option_list.option_count)
         ]
-        assert any("awaiting you" in p for p in prompts)
-        assert any("wait: author" in p for p in prompts)
-        assert any("wait: others" in p for p in prompts)
+        assert any("●" in p for p in prompts)
+        assert any("◇" in p for p in prompts)
+        assert any("○" in p for p in prompts)
 
 
 @pytest.mark.asyncio
@@ -329,7 +329,7 @@ async def test_pr_list_rows_shrink_when_window_is_narrow():
 
         # Exactly two rows, action badge on line 1, title never wraps.
         assert len(lines) == 2
-        assert "awaiting you" in lines[0]
+        assert "●" in lines[0]
         assert lines[1].endswith("…")
         assert len(lines[1]) <= ROW_WIDTH
 
@@ -352,7 +352,7 @@ async def test_pr_list_rows_reflow_on_resize():
         option_list = app.query_one("#pr-option-list", OptionList)
         lines = str(option_list.get_option_at_index(0).prompt).splitlines()
         assert len(lines) == 2
-        assert "awaiting you" in lines[0]
+        assert "●" in lines[0]
         assert len(lines[1]) < wide_length
         assert lines[1].endswith("…")
 
@@ -433,6 +433,7 @@ async def test_pr_list_entries_stay_two_rows_when_scrollable():
             assert len(lines) == 2, f"option {idx} wrapped to {len(lines)} rows"
             assert "@alice" in lines[0], f"option {idx}: author not on metadata row"
             assert lines[1].endswith("…"), f"option {idx}: title not truncated"
+            assert cell_len(lines[0]) <= option_list.scrollable_content_region.width, f"option {idx}: metadata row exceeds pane"
 
 
 @pytest.mark.asyncio
@@ -451,7 +452,7 @@ async def test_pr_list_wide_glyphs_stay_two_rows():
         for idx in range(option_list.option_count):
             lines = str(option_list.get_option_at_index(idx).prompt).splitlines()
             assert len(lines) == 2, f"option {idx} wrapped to {len(lines)} rows"
-            assert "awaiting you" in lines[0], f"option {idx}: badge missing from metadata row"
+            assert "●" in lines[0], f"option {idx}: badge missing from metadata row"
             assert cell_len(lines[0]) <= render_width, f"option {idx}: metadata row exceeds pane"
             assert cell_len(lines[1]) <= render_width, f"option {idx}: title row exceeds pane"
 
