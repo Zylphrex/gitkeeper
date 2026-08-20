@@ -444,3 +444,68 @@ def test_pipeline_sets_reasons_and_waiting_labels():
     assert "directly requested" in by_number[1].score.reasons
     assert by_number[2].score.follow_state == FollowUpState.WAITING_AUTHOR
     assert by_number[2].score.waiting_label == "waiting on author"
+
+
+# ---------- reviewed PRs stay visible (keep-reviewed-prs-visible) ----------
+
+def test_authored_external_approval_is_waiting_others_approved():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
+    pr = make_pr(
+        number=20,
+        author="octocat",
+        pushed_at="2026-08-10T00:00:00Z",
+        reviews=[ReviewRecord(author="bob", state="APPROVED", submitted_at="2026-08-12T00:00:00Z")],
+    )
+    assert derive_followup_state(pr, "octocat") == FollowUpState.WAITING_OTHERS
+    reasons, _ = derive_action_reasons(pr, [], "octocat", cfg.heuristics)
+    assert "respond to review" not in reasons
+    scored = RelevancePipeline(cfg, repo_locator).process([pr])[0]
+    assert scored.score.waiting_label == "approved"
+
+
+def test_authored_external_changes_requested_after_push_is_me_active():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
+    pr = make_pr(
+        number=21,
+        author="octocat",
+        pushed_at="2026-08-10T00:00:00Z",
+        reviews=[ReviewRecord(author="bob", state="CHANGES_REQUESTED", submitted_at="2026-08-12T00:00:00Z")],
+    )
+    assert derive_followup_state(pr, "octocat") == FollowUpState.ME_ACTIVE
+    reasons, rationale = derive_action_reasons(pr, [], "octocat", cfg.heuristics)
+    assert "respond to review" in reasons
+    assert "respond to review" in rationale
+
+
+def test_reviewed_pr_author_push_after_review_is_me_active():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
+    pr = make_pr(
+        number=22,
+        author="alice",
+        pushed_at="2026-08-12T00:00:00Z",
+        requested_reviewers=[ReviewerRequest(login_or_slug="octocat", is_team=False)],
+        reviews=[ReviewRecord(author="octocat", state="APPROVED", submitted_at="2026-08-10T00:00:00Z")],
+    )
+    assert derive_followup_state(pr, "octocat") == FollowUpState.ME_ACTIVE
+    scored = RelevancePipeline(cfg, repo_locator).process([pr])[0]
+    assert scored.score.follow_state == FollowUpState.ME_ACTIVE
+
+
+def test_reviewed_pr_approved_no_push_is_waiting_others():
+    cfg = Config()
+    cfg.github.user = "octocat"
+    repo_locator = RepoLocator(cfg.repositories)
+    pr = make_pr(
+        number=23,
+        author="alice",
+        reviews=[ReviewRecord(author="octocat", state="APPROVED", submitted_at="2026-08-10T00:00:00Z")],
+    )
+    assert derive_followup_state(pr, "octocat") == FollowUpState.WAITING_OTHERS
+    scored = RelevancePipeline(cfg, repo_locator).process([pr])[0]
+    assert scored.score.waiting_label == "approved"

@@ -8,6 +8,7 @@ from gitkeeper.repos import RepoLocator
 from gitkeeper.scoring.calculator import (
     FollowUpState,
     ScoreBreakdown,
+    _latest_external_verdict,
     derive_action_reasons,
     derive_followup_state,
 )
@@ -28,6 +29,8 @@ def _waiting_label(
     if state == FollowUpState.WAITING_AUTHOR:
         return "waiting on author"
     if username and pr.author.lower() == username.lower():
+        if _latest_external_verdict(pr, username) == "APPROVED":
+            return "approved"
         return "awaiting reviewers"
     return "approved"
 

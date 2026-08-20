@@ -90,6 +90,7 @@ def test_followup_config_defaults():
 
     cfg = Config()
     assert cfg.followup.include_authored is True
+    assert cfg.followup.include_reviewed is True
     assert not hasattr(cfg.followup, "show_waiting_on_author")
     assert not hasattr(cfg.followup, "show_waiting_on_others")
     assert not hasattr(cfg.followup, "staleness_warn_after_days")
@@ -103,8 +104,10 @@ def test_load_config_parses_followup_block(monkeypatch, tmp_path):
         """
 followup:
   include_authored: false
+  include_reviewed: false
 """
     )
     cfg = load_config(config_file)
     assert isinstance(cfg.followup, Config.model_fields["followup"].annotation)
     assert cfg.followup.include_authored is False
+    assert cfg.followup.include_reviewed is False

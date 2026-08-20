@@ -46,6 +46,9 @@ class FollowUpConfig(BaseModel):
     include_authored: bool = Field(
         default=True, description="Fetch open PRs authored by the user"
     )
+    include_reviewed: bool = Field(
+        default=True, description="Fetch open PRs reviewed by the user"
+    )
 
 
 class CLIConfig(BaseModel):

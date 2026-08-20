@@ -676,7 +676,9 @@ class GitkeeperApp(App):
                     pass
 
             prs = self.client.fetch_pending_review_requests(
-                user, include_authored=self.config.followup.include_authored
+                user,
+                include_authored=self.config.followup.include_authored,
+                include_reviewed=self.config.followup.include_reviewed,
             )
 
             self.app.call_from_thread(self._set_status, "Evaluating relevance heuristics & local repos...")

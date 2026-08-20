@@ -98,6 +98,8 @@ The system SHALL allow users to author inline review comments on specific diff l
 
 The system SHALL reliably route the inline comment action to the inline comment input dialog for the currently selected diff line, so that the dialog SHALL open whenever the user triggers the comment action while a diff line is selected, regardless of message dispatch naming conventions in the UI framework.
 
+The system SHALL preserve the reviewer's position in the diff view when an inline comment is saved: the selected file, highlighted line, scroll position, and focus SHALL remain as they were when the comment action was triggered.
+
 The system SHALL display existing review threads when a pull request's diff is viewed: each thread SHALL appear attached to its file and diff line alongside the diff content, labeled with the thread author, and visually distinct from the reviewer's own pending comments.
 
 #### Scenario: Add inline comment on a diff line
@@ -106,6 +108,18 @@ The system SHALL display existing review threads when a pull request's diff is v
 - **AND** the dialog SHALL open immediately for the selected file and line without requiring any extra step
 - **AND** attach the pending comment to that file and line number
 - **AND** make the pending comment available for inclusion in a subsequent review submission
+
+#### Scenario: Saving a comment preserves the diff position
+- **WHEN** the user saves an inline comment on a line in a diff file
+- **THEN** the system SHALL keep the commented file selected in the file tree
+- **AND** the system SHALL keep the commented line highlighted in the diff view
+- **AND** the system SHALL keep the current scroll position and focus in the diff pane
+- **AND** the system SHALL display the pending comment on the commented line immediately after saving
+
+#### Scenario: Cancelling a comment preserves the diff position
+- **WHEN** the user cancels the inline comment dialog
+- **THEN** the system SHALL return to the diff viewer with the file selection, line highlight, scroll position, and focus unchanged
+- **AND** the system SHALL NOT attach any comment
 
 #### Scenario: View existing review threads on a diff
 - **WHEN** the user views the diff of a pull request that has existing review threads

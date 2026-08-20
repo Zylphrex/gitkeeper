@@ -197,12 +197,15 @@ class GitHubGraphQLClient:
         self,
         username: Optional[str] = None,
         include_authored: bool = False,
+        include_reviewed: bool = False,
     ) -> List[PullRequestData]:
         """
         Fetch open pull requests where review is requested from the user or
         their teams, plus (when *include_authored* is set) pull requests authored
-        by the user. Search query format: `is:open is:pr review-requested:@me`
-        (or `review-requested:USERNAME`) merged with `author:@me`.
+        by the user, plus (when *include_reviewed* is set) pull requests the user
+        has reviewed. Search query format: `is:open is:pr review-requested:@me`
+        (or `review-requested:USERNAME`) merged with `author:@me` and
+        `reviewed-by:@me`.
         """
         user_filter = username if username else "@me"
 
@@ -220,6 +223,8 @@ class GitHubGraphQLClient:
         extend_search(f"is:open is:pr review-requested:{user_filter} archived:false")
         if include_authored:
             extend_search(f"is:open is:pr author:{user_filter} archived:false")
+        if include_reviewed:
+            extend_search(f"is:open is:pr reviewed-by:{user_filter} archived:false")
 
         results: List[PullRequestData] = []
 

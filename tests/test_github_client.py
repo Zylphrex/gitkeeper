@@ -462,3 +462,48 @@ def test_fetch_authored_retries_502_then_succeeds(monkeypatch):
 
     assert sorted(pr.number for pr in prs) == [500, 501]
     assert len(calls) == 3
+
+
+def test_fetch_reviewed_search_issued_when_enabled(monkeypatch):
+    recorded_variables = []
+    responses = [
+        _search_payload([_pr_node("PR_kwDO600", 600)], has_next_page=False),
+        _search_payload([_pr_node("PR_kwDO601", 601)], has_next_page=False),
+    ]
+    _mock_httpx(monkeypatch, responses, recorded_variables)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat", include_reviewed=True)
+
+    assert [pr.number for pr in prs] == [600, 601]
+    assert len(recorded_variables) == 2
+    assert "review-requested:octocat" in recorded_variables[0]["query"]
+    assert "reviewed-by:octocat" in recorded_variables[1]["query"]
+
+
+def test_fetch_reviewed_not_requested_without_flag(monkeypatch):
+    recorded_variables = []
+    responses = [_search_payload([_pr_node("PR_kwDO700", 700)], has_next_page=False)]
+    _mock_httpx(monkeypatch, responses, recorded_variables)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat")
+    assert [pr.number for pr in prs] == [700]
+    assert len(recorded_variables) == 1
+    assert "reviewed-by:" not in recorded_variables[0]["query"]
+
+
+def test_fetch_reviewed_duplicates_removed_across_searches(monkeypatch):
+    recorded_variables = []
+    responses = [
+        _search_payload([_pr_node("PR_kwDO800", 800)], has_next_page=False),
+        _search_payload([_pr_node("PR_kwDO800", 800)], has_next_page=False),
+        _search_payload([_pr_node("PR_kwDO800", 800)], has_next_page=False),
+    ]
+    _mock_httpx(monkeypatch, responses, recorded_variables)
+
+    client = GitHubGraphQLClient(PersonalAccessTokenProvider("dummy_token"))
+    prs = client.fetch_pending_review_requests("octocat", include_authored=True, include_reviewed=True)
+
+    assert [pr.number for pr in prs] == [800]
+    assert len(recorded_variables) == 3

@@ -149,10 +149,14 @@ def derive_followup_state(
     """
     if _is_author(pr, current_username):
         pushed = _parse_dt(pr.pushed_at)
-        external = _latest_external_verdict_dt(pr, current_username)
-        if external is not None and (pushed is None or external > pushed):
+        external_dt = _latest_external_verdict_dt(pr, current_username)
+        if (
+            _latest_external_verdict(pr, current_username) == "CHANGES_REQUESTED"
+            and external_dt is not None
+            and (pushed is None or external_dt > pushed)
+        ):
             return FollowUpState.ME_ACTIVE  # respond to review on my PR
-        return FollowUpState.WAITING_OTHERS  # awaiting reviewers / CI / merge
+        return FollowUpState.WAITING_OTHERS  # approved & awaiting merge / reviewers / CI
 
     my_verdict = _latest_my_review_dt(pr, current_username)
     if my_verdict is None:
@@ -180,6 +184,25 @@ def _latest_my_verdict(
     state: Optional[str] = None
     for r in pr.reviews:
         if r.author.lower() != username or r.state not in VERDICT_STATES:
+            continue
+        submitted = _parse_dt(r.submitted_at)
+        if submitted is not None and (latest is None or submitted > latest):
+            latest = submitted
+            state = r.state
+    return state
+
+
+def _latest_external_verdict(
+    pr: PullRequestData, current_username: Optional[str]
+) -> Optional[str]:
+    """State of the most recent verdict (approve/request-changes/dismiss) from anyone but the user."""
+    if not current_username:
+        return None
+    username = current_username.lower()
+    latest: Optional[datetime] = None
+    state: Optional[str] = None
+    for r in pr.reviews:
+        if r.author.lower() == username or r.state not in VERDICT_STATES:
             continue
         submitted = _parse_dt(r.submitted_at)
         if submitted is not None and (latest is None or submitted > latest):
@@ -229,7 +252,11 @@ def derive_action_reasons(
     if _is_author(pr, current_username):
         pushed = _parse_dt(pr.pushed_at)
         external = _latest_external_verdict_dt(pr, current_username)
-        if external is not None and (pushed is None or external > pushed):
+        if (
+            _latest_external_verdict(pr, current_username) == "CHANGES_REQUESTED"
+            and external is not None
+            and (pushed is None or external > pushed)
+        ):
             reasons.append("respond to review")
 
     touched_files = sum(1 for ts in touch_scores if ts.total_touches > 0)
